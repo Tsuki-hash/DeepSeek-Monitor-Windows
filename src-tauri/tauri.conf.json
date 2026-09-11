@@ -1,0 +1,51 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "DeepSeekMonitorWindows",
+  "version": "1.2.1",
+  "identifier": "com.deepseek.monitor.windows",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:5180",
+    "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
+    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "DeepSeek Monitor Windows",
+        "width": 356,
+        "height": 600,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "skipTaskbar": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}
