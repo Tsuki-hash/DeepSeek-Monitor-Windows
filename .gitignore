@@ -1,0 +1,78 @@
+# ---------- Node.js / dependencies ----------
+node_modules/
+
+# ---------- Build artifacts ----------
+dist/
+src-tauri/target/
+
+# ---------- Markdown docs policy ----------
+*.md
+*.MD
+!README.md
+!README_EN.md
+
+# ---------- Internal docs ----------
+PRD.md
+IMPLEMENTATION_NOTES.md
+docs/
+
+# ---------- Local environment and secrets ----------
+.npmrc
+.env
+.env.local
+.env.*.local
+*.local.json
+config.json
+
+# ---------- Runtime cache / local app data ----------
+EBWebView/
+AppData/
+Roaming/
+
+# ---------- Development and test outputs ----------
+*.log
+*.err.log
+*.out.log
+cargo-check*.log
+cargo-check*.err.log
+cargo-check*.out.log
+tauri-check*.log
+tauri-check*.err.log
+tauri-check*.out.log
+tauri-dev*.log
+tauri-dev*.err.log
+tauri-dev*.out.log
+tauri-open*.log
+tauri-open*.err.log
+tauri-open*.out.log
+tauri-dev-run*.log
+tauri-dev-run*.err.log
+tauri-dev-run*.out.log
+test-output/
+
+# ---------- Temporary screenshots ----------
+dashboard-mvp.png
+settings-mvp.png
+detail-mvp.png
+
+# ---------- Temporary dirty files ----------
+document.title
+document.title'
+[{]
+*.tmp
+
+# ---------- IDE / editors ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ---------- OS files ----------
+Thumbs.db
+Desktop.ini
+.DS_Store
