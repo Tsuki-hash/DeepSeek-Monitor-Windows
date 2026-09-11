@@ -1,6 +1,6 @@
 {
   "name": "deepseek-monitor-windows",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -12,8 +12,10 @@
     "test:types": "tsc --noEmit -p tsconfig.test.json",
     "test:unit": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "check:version": "node scripts/check-version.mjs",
-    "tauri:check": "powershell -ExecutionPolicy Bypass -File scripts/tauri-check.ps1",
-    "tauri:dev": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev.ps1"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:check": "cargo check --manifest-path src-tauri/Cargo.toml --all-targets"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

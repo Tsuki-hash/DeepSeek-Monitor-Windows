@@ -28,7 +28,7 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 ### 安装
 
-从 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.1_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
+从 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.2_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
 
 运行环境：Windows 10 或 Windows 11，以及 Microsoft Edge WebView2 Runtime（Windows 11 自带，Windows 10 若缺失需单独安装）。
 
@@ -138,17 +138,6 @@ API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**�
 - Rust 1.77.2+，建议 MSVC 工具链
 - Visual Studio Build Tools 2022，勾选 `Desktop development with C++`
 
-`npm run tauri:dev` 和 `npm run tauri:check` 会自动探测本机 VS Build Tools 的位置，不需要手动配路径。
-
-### 关于 `scripts/env.ps1`
-
-上面两个命令会先执行 `scripts/env.ps1`。该脚本把 `CARGO_HOME`、`RUSTUP_HOME`、`npm_config_cache` 等工具链缓存目录**重定向到项目父目录**，并覆盖 `TEMP` / `TMP`，目的是让开发环境自包含、不往系统目录里写东西。
-
-需要知道它的两个副作用：
-
-- 执行后，当前终端会话里的 `cargo` 用的不再是系统原有的工具链配置，机器上也会多出 `.cargo` / `.rustup` / `.npm-cache` 等目录；
-- 如果你本机已经配好了 Rust 环境、不想被重定向，**跳过这两个 npm 脚本、直接执行 `npx tauri dev`** 即可，效果一样。
-
 ### 常用命令
 
 ```powershell
@@ -159,12 +148,14 @@ npm run tauri:dev
 ```
 
 ```powershell
-npm run tauri:check    # 环境与依赖检查
+npm run tauri:check    # cargo check（全部 target）
 npm run check:version  # 校验三处配置里的版本号是否一致
 npm test               # 前端单测（类型 + 用例）
 npm run build          # 类型检查 + 前端构建
-npx tauri build        # 打包 NSIS 安装包
+npm run tauri:build    # 打包 NSIS 安装包
 ```
+
+`npm run tauri:dev` 与 `npm run tauri:build` 分别是 `tauri dev` / `tauri build` 的封装，会按需探测本机 VS Build Tools 的位置，不需要手动配路径。若想直接调用 Tauri CLI，`npx tauri dev` 效果相同。
 
 版本号散落在 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 三处（Tauri 2 的配置不会去读 `package.json`），发版前跑一次 `npm run check:version` 可以避免打出名字对不上的安装包。
 
@@ -200,7 +191,7 @@ DeepSeek-Monitor-Windows/
 │   ├── tauri.conf.json          # 窗口、打包与安全配置
 │   └── capabilities/            # Tauri 权限
 ├── public/assets/               # 图标与静态资源
-├── scripts/                     # Windows 开发脚本
+├── scripts/check-version.mjs    # 发版时校验三处版本号一致
 └── screenshots/                 # README 界面截图
 ```
 
@@ -229,6 +220,14 @@ V4 Pro 已从 2026-09-14 起全部路由到 V4.1 Flash，不再产生独立用�
 ## 版本历史
 
 完整发布记录见 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases)。`v1.0.0` – `v1.1.0` 由 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) 发布，本仓库自 `v1.2.1` 起接手维护。
+
+### v1.2.2
+
+- **凭据改为加密存储**：API Key 与用量 Token 经 Windows DPAPI 加密后写入 `config.json`。密钥绑定当前用户与机器，配置文件被单独拷走无法解密；旧版本留下的明文凭据在首次读取时自动加密回写。
+- **补齐回归测试**：后端 54 项、前端 18 项单元测试，CI 每次推送都会跑。
+- **修复详情页柱顶数值被截断**：窗口宽度 356px 时，按日柱状图顶部的数值不再被裁成 `268….`。
+- 配置损坏时的备份与回退、刷新语义、图表键盘可访问性等一批细节修缮。
+- 安装包为 `DeepSeekMonitorWindows_1.2.2_x64-setup.exe`。
 
 ### v1.2.1
 

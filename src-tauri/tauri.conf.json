@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "DeepSeekMonitorWindows",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "identifier": "com.deepseek.monitor.windows",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5180",
-    "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
-    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "withGlobalTauri": true,
