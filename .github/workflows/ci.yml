@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连续推送时取消尚未完成的旧运行，避免排队堆积。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: frontend (version + typecheck + build)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 三处配置（package.json / tauri.conf.json / Cargo.toml）的版本号必须一致，
+      # 否则发版时会打出名字对不上的安装包。
+      - name: Check version consistency
+        run: npm run check:version
+
+      - name: Type check and build
+        run: npm run build
+
+  rust:
+    name: rust (fmt + check + clippy)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo fmt
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

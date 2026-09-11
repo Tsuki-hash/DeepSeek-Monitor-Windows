@@ -40,7 +40,8 @@ type BalanceData = {
   grantedBalance: string;
   toppedUpBalance: string;
 };
-type BalanceState = "loading" | "ok" | "error" | "nokey";
+// 通用的异步加载状态，余额与用量共用。刻意不绑定具体业务，避免复用时名字误导。
+type LoadState = "loading" | "ok" | "error" | "nokey";
 
 type UsageModel = {
   key: string;
@@ -81,7 +82,11 @@ const fmtTokensShort = (n: number) => {
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return String(Math.round(n));
 };
-const fmtMoney = (n: number) => "¥" + n.toFixed(2);
+const fmtMoney = (n: number, symbol = "¥") => symbol + n.toFixed(2);
+// 币种符号的唯一来源。余额来自官方接口、带 currency 字段（正常为 CNY，也存在 USD 账户）；
+// 而用量与消费来自平台内部接口，恒为人民币计价。两者口径不同，所以共享同一面板时必须
+// 用余额的币种符号，否则会出现「余额 $xx 而当日消耗 ¥xx」的矛盾显示。
+const currencySymbol = (currency?: string) => (currency === "USD" ? "$" : "¥");
 const mmdd = (date: string) => {
   const parts = date.split("-");
   return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : date;
@@ -159,17 +164,24 @@ function App() {
   const [model, setModel] = React.useState<ModelName>("flash");
 
   const [balance, setBalance] = React.useState<BalanceData | null>(null);
-  const [balanceState, setBalanceState] = React.useState<BalanceState>("loading");
+  const [balanceState, setBalanceState] = React.useState<LoadState>("loading");
   const [balanceError, setBalanceError] = React.useState("");
 
   const [usage, setUsage] = React.useState<UsageResult | null>(null);
-  const [usageState, setUsageState] = React.useState<BalanceState>("loading");
+  const [usageState, setUsageState] = React.useState<LoadState>("loading");
   const [usageError, setUsageError] = React.useState("");
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = React.useState(60);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = React.useState(false);
 
-  const loadBalance = React.useCallback(() => {
-    setBalanceState("loading");
+  // silent=true 表示后台刷新：已有数据时保留旧值，不再把面板打回「查询中…」骨架，
+  // 否则开启 1 分钟自动刷新后会周期性闪烁。若当前没有可用数据（首次或上次失败），
+  // 仍显示加载态，避免用户对着「查询失败」无从判断是否正在重试。
+  const loadBalance = React.useCallback((silent = false) => {
+    if (silent) {
+      setBalanceState((prev) => (prev === "ok" ? prev : "loading"));
+    } else {
+      setBalanceState("loading");
+    }
     void invoke<BalanceData>("fetch_balance")
       .then((data) => {
         setBalance(data);
@@ -182,8 +194,12 @@ function App() {
       });
   }, []);
 
-  const loadUsage = React.useCallback(() => {
-    setUsageState("loading");
+  const loadUsage = React.useCallback((silent = false) => {
+    if (silent) {
+      setUsageState((prev) => (prev === "ok" ? prev : "loading"));
+    } else {
+      setUsageState("loading");
+    }
     void fetchCurrentUsage()
       .then((data) => {
         setUsage(data);
@@ -198,10 +214,13 @@ function App() {
       });
   }, []);
 
-  const refreshAll = React.useCallback(() => {
-    loadBalance();
-    loadUsage();
-  }, [loadBalance, loadUsage]);
+  const refreshAll = React.useCallback(
+    (silent = false) => {
+      loadBalance(silent);
+      loadUsage(silent);
+    },
+    [loadBalance, loadUsage],
+  );
 
   React.useEffect(() => {
     refreshAll();
@@ -228,8 +247,9 @@ function App() {
   React.useEffect(() => {
     const shown = listen("main-window-shown", () => {
       setWindowVisible(true);
-      // 面板被唤出即拉最新数据，避免托盘唤出后看到的是旧快照
-      refreshAll();
+      // 面板被唤出即拉最新数据，避免托盘唤出后看到的是旧快照。
+      // 走静默刷新：唤出瞬间面板上已有上一轮的数据，不该闪一下「查询中…」。
+      refreshAll(true);
     });
     const hidden = listen("main-window-hidden", () => {
       setWindowVisible(false);
@@ -244,7 +264,8 @@ function App() {
     if (!autoRefreshEnabled || !windowVisible) {
       return;
     }
-    const timer = window.setInterval(refreshAll, refreshIntervalSeconds * 1000);
+    // 自动刷新属于后台更新，走静默模式
+    const timer = window.setInterval(() => refreshAll(true), refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
   }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds, windowVisible]);
 
@@ -264,7 +285,7 @@ function App() {
           usage={usage}
           usageState={usageState}
           usageError={usageError}
-          onRefresh={refreshAll}
+          onRefresh={() => refreshAll()}
           onClose={hideWindow}
           onSettings={() => setView("settings")}
           onDetail={(nextModel) => {
@@ -298,11 +319,47 @@ function App() {
 }
 
 function BrandIcon({ size = 32 }: { size?: number }) {
+  // 静态资源缺失时（打包遗漏、被杀软清理）不显示裂图，退化为一个同尺寸的占位块。
+  const [failed, setFailed] = React.useState(false);
   return (
     <div className="brand-icon" style={{ width: size, height: size }}>
-      <img src="/assets/deepseek-color.png" alt="DeepSeek" />
+      {failed ? (
+        <span className="brand-icon-fallback" aria-hidden="true">
+          R
+        </span>
+      ) : (
+        <img
+          src="/assets/deepseek-color.png"
+          alt="DeepSeek"
+          onError={() => setFailed(true)}
+        />
+      )}
     </div>
   );
+}
+
+// 主题的唯一来源：存储键、DOM 属性名、默认值只在这里定义一次。
+// 首屏渲染前的引导代码与 React 内的 useTheme() 都调用同一组函数，
+// 避免「组件内改一次 + 模块顶层再改一次」那种靠巧合保持一致的状态分散。
+const THEME_STORAGE_KEY = "ui-theme";
+const THEME_ATTR = "data-theme";
+type Theme = "dark" | "light";
+const readStoredTheme = (): Theme =>
+  localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark";
+const applyTheme = (theme: Theme) =>
+  document.documentElement.setAttribute(THEME_ATTR, theme);
+
+function useTheme() {
+  const [theme, setTheme] = React.useState<Theme>(readStoredTheme);
+  // 状态与 DOM 属性、持久化三者在这里同步；调用方只关心 theme 与 toggleTheme
+  React.useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+  const toggleTheme = React.useCallback(() => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  }, []);
+  return { theme, toggleTheme };
 }
 
 function DashboardPanel({
@@ -318,25 +375,17 @@ function DashboardPanel({
   onDetail,
 }: {
   balance: BalanceData | null;
-  balanceState: BalanceState;
+  balanceState: LoadState;
   balanceError: string;
   usage: UsageResult | null;
-  usageState: BalanceState;
+  usageState: LoadState;
   usageError: string;
   onRefresh: () => void;
   onClose: () => void;
   onSettings: () => void;
   onDetail: (model: ModelName) => void;
 }) {
-  const [theme, setTheme] = React.useState<string>(
-    () => localStorage.getItem("ui-theme") || "dark",
-  );
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("ui-theme", next);
-    document.documentElement.setAttribute("data-theme", next);
-  };
+  const { theme, toggleTheme } = useTheme();
   const flash = usage?.models.find((item) => item.key === "flash") ?? null;
   const pro = usage?.models.find((item) => item.key === "pro") ?? null;
   const maxTokens = Math.max(flash?.totalTokens ?? 0, pro?.totalTokens ?? 0, 1);
@@ -412,12 +461,12 @@ function BalanceCard({
   monthCost,
 }: {
   balance: BalanceData | null;
-  state: BalanceState;
+  state: LoadState;
   error: string;
   todayCost: number | null;
   monthCost: number | null;
 }) {
-  const symbol = balance?.currency === "USD" ? "$" : "¥";
+  const symbol = currencySymbol(balance?.currency);
   const amount =
     state === "loading"
       ? "查询中…"
@@ -449,14 +498,14 @@ function BalanceCard({
             <SunMedium size={15} />
             <span>当日消耗</span>
           </div>
-          <strong>{todayCost != null ? fmtMoney(todayCost) : "—"}</strong>
+          <strong>{todayCost != null ? fmtMoney(todayCost, symbol) : "—"}</strong>
         </div>
         <div className="mini-card">
           <div className="caption-with-icon orange">
             <CalendarDays size={15} />
             <span>本月消费</span>
           </div>
-          <strong>{monthCost != null ? fmtMoney(monthCost) : "—"}</strong>
+          <strong>{monthCost != null ? fmtMoney(monthCost, symbol) : "—"}</strong>
         </div>
       </div>
     </article>
@@ -473,7 +522,7 @@ function UsageRow({
   modelKey: ModelName;
   data: UsageModel | null;
   maxTokens: number;
-  state: BalanceState;
+  state: LoadState;
   onClick: () => void;
 }) {
   const isFlash = modelKey === "flash";
@@ -526,17 +575,150 @@ function UsageRow({
   );
 }
 
+type StackedPoint = {
+  date: string;
+  hit: number;
+  miss: number;
+  response: number;
+  other: number;
+  total: number;
+};
+
+// 主面板（Flash + Pro 合并）与详情页（单模型）的柱状图此前是两份近乎逐行相同的 JSX
+// （约 70 行 × 2），本次评审就需要人工比对两处确认逻辑一致。抽成同一个组件后，
+// 分段顺序、tooltip 结构、可访问性只有一处实现，改样式或加分段不必再同步两处。
+// 两处仅类名与日期标签元素不同，用 variant 区分，保持各自的渲染结果不变。
+function StackedBarChart({
+  points,
+  variant,
+  hasOther,
+}: {
+  points: StackedPoint[];
+  variant: "summary" | "detail";
+  hasOther: boolean;
+}) {
+  const [hoveredIdx, setHoveredIdx] = React.useState<number | null>(null);
+  const MIN_BAR = 3; // 整根柱子的最小可见高度百分比（含空数据占位）
+  const maxVal = Math.max(...points.map((point) => point.total), 1);
+  const isSummary = variant === "summary";
+
+  return (
+    <>
+      <div
+        className={isSummary ? "bars" : "detail-bars"}
+        onMouseLeave={() => setHoveredIdx(null)}
+      >
+        {points.map((point, idx) => {
+          // 键盘用户与读屏用户拿到的是同一条信息：日期、合计与各分段明细
+          const label =
+            `${point.date}：合计 ${fmtInt(point.total)} tokens，` +
+            `命中 ${fmtInt(point.hit)}，未命中 ${fmtInt(point.miss)}，输出 ${fmtInt(point.response)}` +
+            (point.other > 0 ? `，其他 ${fmtInt(point.other)}` : "");
+          return (
+            <div className={isSummary ? "bar-column" : "detail-bar-column"} key={point.date}>
+              {hoveredIdx === idx && point.total > 0 && (
+                <div
+                  className={`bar-tooltip${
+                    idx <= 1 ? " align-left" : idx >= points.length - 2 ? " align-right" : ""
+                  }`}
+                >
+                  <div className="bar-tooltip-head">
+                    <span className="bar-tooltip-date">{point.date}</span>
+                    <strong>{fmtInt(point.total)} tokens</strong>
+                  </div>
+                  <span className="bar-tooltip-row">
+                    <i className="dot hit" />输入（命中缓存）
+                    <strong>{fmtInt(point.hit)} tokens</strong>
+                  </span>
+                  <span className="bar-tooltip-row">
+                    <i className="dot miss" />输入（未命中缓存）
+                    <strong>{fmtInt(point.miss)} tokens</strong>
+                  </span>
+                  <span className="bar-tooltip-row">
+                    <i className="dot response" />输出
+                    <strong>{fmtInt(point.response)} tokens</strong>
+                  </span>
+                  {point.other > 0 && (
+                    <span className="bar-tooltip-row">
+                      <i className="dot other" />其他（未归类）
+                      <strong>{fmtInt(point.other)} tokens</strong>
+                    </span>
+                  )}
+                </div>
+              )}
+              {isSummary ? (
+                <span className="bar-value">
+                  {point.total > 0 ? fmtTokensShort(point.total) : "0"}
+                </span>
+              ) : (
+                <span>{point.total > 0 ? fmtTokensShort(point.total) : ""}</span>
+              )}
+              <div className={isSummary ? "bar-slot" : "detail-bar-slot"}>
+                <div
+                  className={isSummary ? "cache-bar" : "detail-bar-stacked"}
+                  role="img"
+                  tabIndex={0}
+                  aria-label={label}
+                  style={{
+                    height: `${point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
+                  }}
+                  onMouseEnter={() => setHoveredIdx(idx)}
+                  onMouseLeave={() => setHoveredIdx(null)}
+                  onFocus={() => setHoveredIdx(idx)}
+                  onBlur={() => setHoveredIdx(null)}
+                >
+                  {point.total > 0 ? (
+                    <>
+                      {point.hit > 0 && <i className="seg hit" style={{ flexGrow: point.hit }} />}
+                      {point.miss > 0 && <i className="seg miss" style={{ flexGrow: point.miss }} />}
+                      {point.response > 0 && (
+                        <i className="seg response" style={{ flexGrow: point.response }} />
+                      )}
+                      {point.other > 0 && <i className="seg other" style={{ flexGrow: point.other }} />}
+                    </>
+                  ) : (
+                    <i className="seg empty" />
+                  )}
+                </div>
+              </div>
+              {isSummary ? (
+                <span className="bar-day">{mmdd(point.date)}</span>
+              ) : (
+                <em>{mmdd(point.date)}</em>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="chart-legend-bottom">
+        <span className="chart-legend-item">
+          <i className="dot hit" />命中
+        </span>
+        <span className="chart-legend-item">
+          <i className="dot miss" />未命中
+        </span>
+        <span className="chart-legend-item">
+          <i className="dot response" />输出
+        </span>
+        {hasOther && (
+          <span className="chart-legend-item">
+            <i className="dot other" />其他
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
 function UsageChart({
   usage,
   state,
   error,
 }: {
   usage: UsageResult | null;
-  state: BalanceState;
+  state: LoadState;
   error: string;
 }) {
-  const [hoveredIdx, setHoveredIdx] = React.useState<number | null>(null);
-  const MIN_BAR = 3;
   const days = recentUsageDays(usage?.days ?? []);
   const points = days.map((day) => {
     // Flash 与 Pro 合并，不分模型
@@ -548,7 +730,6 @@ function UsageChart({
     return { date: day.date, hit, miss, response, other, total: hit + miss + response + other };
   });
   const hasOther = points.some((point) => point.other > 0);
-  const maxVal = Math.max(...points.map((point) => point.total), 1);
   const sumHit = points.reduce((sum, point) => sum + point.hit, 0);
   const sumMiss = points.reduce((sum, point) => sum + point.miss, 0);
   const sumTotal = points.reduce((sum, point) => sum + point.total, 0);
@@ -574,87 +755,7 @@ function UsageChart({
         </span>
       </div>
       {state === "ok" && points.length > 0 ? (
-        <>
-          <div className="bars" onMouseLeave={() => setHoveredIdx(null)}>
-            {points.map((point, idx) => (
-              <div className="bar-column" key={point.date}>
-                {hoveredIdx === idx && point.total > 0 && (
-                  <div
-                    className={`bar-tooltip${
-                      idx <= 1 ? " align-left" : idx >= points.length - 2 ? " align-right" : ""
-                    }`}
-                  >
-                    <div className="bar-tooltip-head">
-                      <span className="bar-tooltip-date">{point.date}</span>
-                      <strong>{fmtInt(point.total)} tokens</strong>
-                    </div>
-                    <span className="bar-tooltip-row">
-                      <i className="dot hit" />输入（命中缓存）
-                      <strong>{fmtInt(point.hit)} tokens</strong>
-                    </span>
-                    <span className="bar-tooltip-row">
-                      <i className="dot miss" />输入（未命中缓存）
-                      <strong>{fmtInt(point.miss)} tokens</strong>
-                    </span>
-                    <span className="bar-tooltip-row">
-                      <i className="dot response" />输出
-                      <strong>{fmtInt(point.response)} tokens</strong>
-                    </span>
-                    {point.other > 0 && (
-                      <span className="bar-tooltip-row">
-                        <i className="dot other" />其他（未归类）
-                        <strong>{fmtInt(point.other)} tokens</strong>
-                      </span>
-                    )}
-                  </div>
-                )}
-                <span className="bar-value">
-                  {point.total > 0 ? fmtTokensShort(point.total) : "0"}
-                </span>
-                <div className="bar-slot">
-                  <div
-                    className="cache-bar"
-                    style={{
-                      height: `${point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
-                    }}
-                    onMouseEnter={() => setHoveredIdx(idx)}
-                    onMouseLeave={() => setHoveredIdx(null)}
-                  >
-                    {point.total > 0 ? (
-                      <>
-                        {point.hit > 0 && <i className="seg hit" style={{ flexGrow: point.hit }} />}
-                        {point.miss > 0 && <i className="seg miss" style={{ flexGrow: point.miss }} />}
-                        {point.response > 0 && (
-                          <i className="seg response" style={{ flexGrow: point.response }} />
-                        )}
-                        {point.other > 0 && <i className="seg other" style={{ flexGrow: point.other }} />}
-                      </>
-                    ) : (
-                      <i className="seg empty" />
-                    )}
-                  </div>
-                </div>
-                <span className="bar-day">{mmdd(point.date)}</span>
-              </div>
-            ))}
-          </div>
-          <div className="chart-legend-bottom">
-            <span className="chart-legend-item">
-              <i className="dot hit" />命中
-            </span>
-            <span className="chart-legend-item">
-              <i className="dot miss" />未命中
-            </span>
-            <span className="chart-legend-item">
-              <i className="dot response" />输出
-            </span>
-            {hasOther && (
-              <span className="chart-legend-item">
-                <i className="dot other" />其他
-              </span>
-            )}
-          </div>
-        </>
+        <StackedBarChart points={points} variant="summary" hasOther={hasOther} />
       ) : (
         <div className="chart-placeholder">{placeholder}</div>
       )}
@@ -686,7 +787,9 @@ function SettingsPanel({
   const [usageStatus, setUsageStatus] = React.useState("");
   const [usageSyncing, setUsageSyncing] = React.useState(false);
   const [showManualPaste, setShowManualPaste] = React.useState(false);
-  const [appVersion, setAppVersion] = React.useState("1.2.1");
+  // 空串表示「版本未知」。刻意不写死一个兜底版本号：那个数字会随着发版过期，
+  // 显示出来反而是错的信息，不如显示「—」。
+  const [appVersion, setAppVersion] = React.useState("");
   const configPath = config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
   React.useEffect(() => {
@@ -713,9 +816,12 @@ function SettingsPanel({
   React.useEffect(() => {
     void getVersion()
       .then(setAppVersion)
-      .catch(() => setAppVersion("1.2.1"));
+      .catch(() => setAppVersion(""));
   }, []);
 
+  // 保存 Token 之后刷新用量。这里刻意不向外抛出：调用它的两条路径（事件回调、保存按钮）
+  // 一旦抛出，要么在回调里变成 unhandled rejection，要么被外层笼统的「保存或验证失败」
+  // 覆盖掉下面这句更准确的提示——而 Token 其实已经成功落盘，用户会被误导去重新粘贴。
   const refreshUsageAfterToken = React.useCallback(
     (prefix: string) => {
       setUsageStatus(`${prefix}，正在刷新用量数据…`);
@@ -728,7 +834,7 @@ function SettingsPanel({
         .catch((error) => {
           const message = typeof error === "string" ? error : "用量刷新失败";
           setUsageStatus(`${prefix}，但用量刷新失败：${message}`);
-          throw error;
+          return null;
         });
     },
     [onUsageLoaded],
@@ -775,7 +881,7 @@ function SettingsPanel({
         return invoke<BalanceData>("fetch_balance");
       })
       .then((balance) => {
-        const symbol = balance.currency === "USD" ? "$" : "¥";
+        const symbol = currencySymbol(balance.currency);
         const tip = balance.isAvailable ? "" : "（余额不足）";
         setStatus(`验证通过，当前余额 ${symbol}${balance.totalBalance}${tip}`);
       })
@@ -838,7 +944,9 @@ function SettingsPanel({
         return refreshUsageAfterToken("手动 Token 已保存");
       })
       .catch((error) => {
-        setUsageStatus(typeof error === "string" ? error : "保存或验证失败");
+        // 走到这里说明是「保存」这一步失败（刷新阶段的失败已在 refreshUsageAfterToken
+        // 内处理并给出更准确的文案），所以不再笼统地说"保存或验证失败"。
+        setUsageStatus(typeof error === "string" ? error : "用量 Token 保存失败");
       })
       .finally(() => setBusy(false));
   }, [refreshUsageAfterToken, usageToken]);
@@ -1024,7 +1132,7 @@ function SettingsPanel({
         <SettingsSection icon={<Info size={15} />} title="关于">
           <div className="version-row">
             <span>当前版本</span>
-            <strong>v{appVersion}</strong>
+            <strong>{appVersion ? `v${appVersion}` : "—"}</strong>
           </div>
         </SettingsSection>
 
@@ -1079,7 +1187,7 @@ function ModelDetailPanel({
 }: {
   model: ModelName;
   usage: UsageResult | null;
-  usageState: BalanceState;
+  usageState: LoadState;
   onBack: () => void;
 }) {
   const isFlash = model === "flash";
@@ -1098,12 +1206,8 @@ function ModelDetailPanel({
     return { date: day.date, hit, miss, response, other, total: hit + miss + response + other };
   });
   const hasOther = points.some((point) => point.other > 0);
-  const maxVal = Math.max(...points.map((point) => point.total), 1);
   const rangeText =
     points.length > 0 ? `${mmdd(points[0].date)} - ${mmdd(points[points.length - 1].date)}` : "";
-
-  const [hoveredIdx, setHoveredIdx] = React.useState<number | null>(null);
-  const MIN_BAR = 3; // 整根柱子的最小可见高度百分比（含空数据占位）
 
   return (
     <section className="panel detail-panel" data-testid="detail-panel">
@@ -1146,74 +1250,7 @@ function ModelDetailPanel({
           </div>
         </div>
         {usageState === "ok" && points.length > 0 ? (
-          <>
-            <div className="detail-bars" onMouseLeave={() => setHoveredIdx(null)}>
-              {points.map((point, idx) => (
-                <div className="detail-bar-column" key={point.date}>
-                  {hoveredIdx === idx && point.total > 0 && (
-                    <div
-                      className={`bar-tooltip${
-                        idx <= 1 ? " align-left" : idx >= points.length - 2 ? " align-right" : ""
-                      }`}
-                    >
-                      <div className="bar-tooltip-head">
-                        <span className="bar-tooltip-date">{point.date}</span>
-                        <strong>{fmtInt(point.total)} tokens</strong>
-                      </div>
-                      <span className="bar-tooltip-row">
-                        <i className="dot hit" />输入（命中缓存）
-                        <strong>{fmtInt(point.hit)} tokens</strong>
-                      </span>
-                      <span className="bar-tooltip-row">
-                        <i className="dot miss" />输入（未命中缓存）
-                        <strong>{fmtInt(point.miss)} tokens</strong>
-                      </span>
-                      <span className="bar-tooltip-row">
-                        <i className="dot response" />输出
-                        <strong>{fmtInt(point.response)} tokens</strong>
-                      </span>
-                      {point.other > 0 && (
-                        <span className="bar-tooltip-row">
-                          <i className="dot other" />其他（未归类）
-                          <strong>{fmtInt(point.other)} tokens</strong>
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <span>{point.total > 0 ? fmtTokensShort(point.total) : ""}</span>
-                  <div className="detail-bar-slot">
-                    {/* 柱高按当天合计占最大值的比例；内部各段用 flex-grow 按真实 token 数分配，比例精确且永不溢出裁剪 */}
-                    <div
-                      className="detail-bar-stacked"
-                      style={{
-                        height: `${point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
-                      }}
-                      onMouseEnter={() => setHoveredIdx(idx)}
-                      onMouseLeave={() => setHoveredIdx(null)}
-                    >
-                      {point.total > 0 ? (
-                        <>
-                          {point.hit > 0 && <i className="seg hit" style={{ flexGrow: point.hit }} />}
-                          {point.miss > 0 && <i className="seg miss" style={{ flexGrow: point.miss }} />}
-                          {point.response > 0 && <i className="seg response" style={{ flexGrow: point.response }} />}
-                          {point.other > 0 && <i className="seg other" style={{ flexGrow: point.other }} />}
-                        </>
-                      ) : (
-                        <i className="seg empty" />
-                      )}
-                    </div>
-                  </div>
-                  <em>{mmdd(point.date)}</em>
-                </div>
-              ))}
-            </div>
-            <div className="chart-legend-bottom">
-              <span className="chart-legend-item"><i className="dot hit" />命中</span>
-              <span className="chart-legend-item"><i className="dot miss" />未命中</span>
-              <span className="chart-legend-item"><i className="dot response" />输出</span>
-              {hasOther && <span className="chart-legend-item"><i className="dot other" />其他</span>}
-            </div>
-          </>
+          <StackedBarChart points={points} variant="detail" hasOther={hasOther} />
         ) : (
           <div className="chart-placeholder">
             {usageState === "nokey" ? "未配置用量 Token" : usageState === "loading" ? "查询中…" : "暂无数据"}
@@ -1225,7 +1262,8 @@ function ModelDetailPanel({
 }
 
 // Apply the saved theme before first render to avoid a flash of the wrong skin.
-document.documentElement.setAttribute("data-theme", localStorage.getItem("ui-theme") || "dark");
+// 仅此一处引导，具体读写规则复用上面的 readStoredTheme / applyTheme。
+applyTheme(readStoredTheme());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

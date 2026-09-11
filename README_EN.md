@@ -139,6 +139,15 @@ The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepsee
 
 `npm run tauri:dev` and `npm run tauri:check` detect your Visual Studio Build Tools installation automatically, so no paths need to be configured by hand.
 
+### About `scripts/env.ps1`
+
+Both commands above run `scripts/env.ps1` first. That script redirects the toolchain caches (`CARGO_HOME`, `RUSTUP_HOME`, `npm_config_cache`, …) to the project's parent directory and also overrides `TEMP` / `TMP`, so the development environment stays self-contained and writes nothing into system directories.
+
+Two side effects are worth knowing:
+
+- After it runs, `cargo` in that terminal session no longer uses your system toolchain configuration, and directories such as `.cargo` / `.rustup` / `.npm-cache` appear next to the project.
+- If you already have a working Rust setup and would rather not be redirected, **skip these two npm scripts and run `npx tauri dev` directly** — the result is the same.
+
 ### Commands
 
 ```powershell
@@ -149,9 +158,15 @@ npm run tauri:dev
 ```
 
 ```powershell
-npm run tauri:check   # environment and dependency check
-npx tauri build       # build the NSIS installer
+npm run tauri:check    # environment and dependency check
+npm run check:version  # verify the version number is consistent across config files
+npm run build          # type check + frontend build
+npx tauri build        # build the NSIS installer
 ```
+
+The version number lives in three places — `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` (Tauri 2 does not read `package.json`). Running `npm run check:version` before a release prevents shipping an installer whose name does not match its contents.
+
+Pushes and pull requests run `.github/workflows/ci.yml`: version consistency, type check and frontend build, `cargo fmt --check`, `cargo check`, and `cargo clippy -- -D warnings`.
 
 The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see `Visual Studio Build Tools not found`, install Build Tools 2022 and confirm the C++ workload is selected.
 
@@ -159,6 +174,7 @@ The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see
 
 ```text
 DeepSeek-Monitor-Windows/
+├── .github/workflows/           # CI (version consistency, frontend build, cargo check/clippy)
 ├── src/                         # Frontend
 │   ├── main.tsx                 # The entire UI: dashboard, settings, detail page
 │   └── styles.css               # All styles, including dark and light skins

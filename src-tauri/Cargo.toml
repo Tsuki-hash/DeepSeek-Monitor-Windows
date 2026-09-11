@@ -2,9 +2,9 @@
 name = "app"
 version = "1.2.1"
 description = "DeepSeek Monitor Windows desktop app"
-authors = ["you"]
+authors = ["Tsuki-hash"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -25,3 +25,12 @@ tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", features = ["json"] }
+# Tauri 已间接依赖 tokio，这里只是提为直接依赖以便用 try_join! 并发发起两个用量请求，
+# 不会新增编译单元。
+tokio = { version = "1", features = ["macros"] }
+
+# Tauri 官方推荐的 release 配置：体积与内存占用明显下降，代价是全量构建更慢。
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
