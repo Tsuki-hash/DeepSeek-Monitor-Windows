@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "login-sync-window",
+  "description": "加载远程 DeepSeek 登录页的窗口：只授予事件上报所需的最小权限。该窗口内的页面不受我们控制，不应获得窗口控制类权限。",
+  "windows": ["login-sync"],
+  "remote": {
+    "urls": [
+      "https://platform.deepseek.com",
+      "https://platform.deepseek.com/*"
+    ]
+  },
+  "permissions": ["core:event:allow-emit"]
+}

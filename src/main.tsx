@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -219,13 +219,34 @@ function App() {
       });
   }, []);
 
+  // 面板是否可见。窗口隐藏不会卸载 WebView，所以自动刷新定时器必须靠这个状态显式暂停，
+  // 否则面板整天收在托盘里也会按时打接口。该状态由 Rust 侧在显隐时发的事件驱动
+  // （见 lib.rs 的 EVENT_MAIN_WINDOW_SHOWN / EVENT_MAIN_WINDOW_HIDDEN），
+  // 这样从托盘唤出、托盘左键切换、程序内点关闭三条路径都覆盖得到。
+  const [windowVisible, setWindowVisible] = React.useState(true);
+
   React.useEffect(() => {
-    if (!autoRefreshEnabled) {
+    const shown = listen("main-window-shown", () => {
+      setWindowVisible(true);
+      // 面板被唤出即拉最新数据，避免托盘唤出后看到的是旧快照
+      refreshAll();
+    });
+    const hidden = listen("main-window-hidden", () => {
+      setWindowVisible(false);
+    });
+    return () => {
+      void shown.then((unlisten) => unlisten());
+      void hidden.then((unlisten) => unlisten());
+    };
+  }, [refreshAll]);
+
+  React.useEffect(() => {
+    if (!autoRefreshEnabled || !windowVisible) {
       return;
     }
     const timer = window.setInterval(refreshAll, refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds]);
+  }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds, windowVisible]);
 
   const hideWindow = React.useCallback(() => {
     void invoke("hide_main_window").catch(() => {
@@ -678,8 +699,14 @@ function SettingsPanel({
         setStatus(nextConfig.apiKeyConfigured ? `已配置 ${nextConfig.apiKeyPreview}` : "未配置 API Key");
         setUsageStatus(nextConfig.usageTokenConfigured ? "用量 Token 已配置" : "未配置用量 Token");
       })
-      .catch(() => {
-        setStatus("浏览器预览模式，未连接本地配置");
+      .catch((error) => {
+        // 只有"根本没有 Tauri IPC"才是浏览器预览，属预期情况；真机上失败一律是真实错误，
+        // 必须原样透出——否则配置文件损坏会被伪装成"浏览器预览模式"，用户完全无从定位。
+        if (!isTauri()) {
+          setStatus("浏览器预览模式，未连接本地配置");
+          return;
+        }
+        setStatus(typeof error === "string" ? error : "读取本地配置失败");
       });
   }, []);
 

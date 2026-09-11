@@ -191,7 +191,7 @@ That is by design: closing hides the panel to the tray. To actually quit, right-
 V4 Pro has been routed entirely to V4.1 Flash since 2026-09-14 and no longer produces separate usage. The row stays so you can look back at historical data.
 
 **Does it hammer the DeepSeek endpoints?**
-Balance and usage are each requested once when you open the panel, when you refresh manually, and on whatever auto-refresh interval you set (off by default, minimum 1 minute). There is no background polling.
+Balance and usage are each requested once in three situations: when you open the panel (including bringing it back from the tray), when you refresh manually, and on whatever auto-refresh interval you set (off by default, minimum 1 minute). Auto-refresh pauses while the panel is hidden in the tray, so nothing polls in the background.
 
 ## Version history
 

@@ -9,7 +9,7 @@ pub fn run() {
         process::Command,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, OnceLock,
         },
         thread,
         time::Duration,
@@ -21,14 +21,23 @@ pub fn run() {
         Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
     };
 
+    // 配置缺字段时的默认刷新间隔（秒）。必须走 serde 默认值，不能依赖派生的 Default：
+    // 旧版本写入的或用户手工编辑过的 config.json 少一个字段，就会让反序列化整体失败，
+    // 而 read_stored_config 是所有命令的前置步骤，等于全部功能瘫痪。
+    fn default_refresh_interval_seconds() -> u64 {
+        60
+    }
+
     #[derive(Debug, Default, Deserialize, Serialize)]
     struct StoredConfig {
         api_key: Option<String>,
         #[serde(default)]
         usage_token: Option<String>,
+        #[serde(default = "default_refresh_interval_seconds")]
         refresh_interval_seconds: u64,
         #[serde(default)]
         auto_refresh_enabled: bool,
+        #[serde(default)]
         autostart: bool,
     }
 
@@ -55,14 +64,34 @@ pub fn run() {
         let path = config_path()?;
         if !path.exists() {
             return Ok(StoredConfig {
-                refresh_interval_seconds: 60,
+                refresh_interval_seconds: default_refresh_interval_seconds(),
                 ..StoredConfig::default()
             });
         }
 
         let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        let mut config: StoredConfig =
-            serde_json::from_str(&text).map_err(|error| error.to_string())?;
+        let mut config: StoredConfig = match serde_json::from_str(&text) {
+            Ok(config) => config,
+            Err(error) => {
+                // 配置损坏（半截写入、外部工具改坏、旧格式）不能演变成全链路失效：
+                // 把损坏文件改名留证，回退默认配置继续运行。用户重填一次凭据即可恢复，
+                // 比"设置页一直报错、什么也查不出来"好得多。
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs())
+                    .unwrap_or(0);
+                let backup = path.with_extension(format!("json.corrupt-{stamp}"));
+                log::warn!(
+                    "配置文件解析失败，已备份到 {} 并重置：{error}",
+                    backup.display()
+                );
+                let _ = fs::rename(&path, &backup);
+                return Ok(StoredConfig {
+                    refresh_interval_seconds: default_refresh_interval_seconds(),
+                    ..StoredConfig::default()
+                });
+            }
+        };
         config.refresh_interval_seconds =
             normalize_refresh_interval_seconds(config.refresh_interval_seconds);
         Ok(config)
@@ -82,7 +111,37 @@ pub fn run() {
         }
 
         let text = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
-        fs::write(path, text).map_err(|error| error.to_string())
+
+        // 原子写入：先写同目录临时文件再 rename。fs::write 会直接截断目标文件，
+        // 若在写入中途被强杀（Windows 更新、任务管理器结束进程）或断电，会留下半截 JSON，
+        // 下次启动即解析失败。rename 覆盖已存在目标在 Windows 上等效
+        // MoveFileEx(REPLACE_EXISTING)，同卷内是原子操作。
+        let temp_path = path.with_extension("json.tmp");
+        fs::write(&temp_path, text).map_err(|error| error.to_string())?;
+        fs::rename(&temp_path, &path).map_err(|error| {
+            // rename 失败时清理临时文件，避免在配置目录留下垃圾
+            let _ = fs::remove_file(&temp_path);
+            error.to_string()
+        })
+    }
+
+    // 全局复用的 HTTP 客户端。reqwest::Client 内含连接池与 TLS 会话，官方建议复用；
+    // 每次请求都新建会让每轮自动刷新重做 TCP + TLS 握手。UA 与超时集中在此定义，
+    // 避免三处调用点各写一份、将来改动漏改其一。
+    const HTTP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+                                   AppleWebKit/537.36 (KHTML, like Gecko) \
+                                   Chrome/148.0.0.0 Safari/537.36";
+    const HTTP_TIMEOUT_SECONDS: u64 = 15;
+
+    fn http_client() -> &'static reqwest::Client {
+        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+        CLIENT.get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(HTTP_USER_AGENT)
+                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+                .build()
+                .expect("构建 HTTP 客户端失败")
+        })
     }
 
     fn api_key_preview(api_key: &str) -> String {
@@ -153,15 +212,30 @@ pub fn run() {
         )))
     }
 
+    // 面板显隐事件。窗口隐藏不会卸载 WebView，前端的 setInterval 不会自己停；
+    // 反过来，从托盘唤出窗口也不会触发 React 重渲染。两端都要靠事件对齐，
+    // 否则会出现"打开面板看到旧数据、收进托盘还在后台轮询"。
+    const EVENT_MAIN_WINDOW_SHOWN: &str = "main-window-shown";
+    const EVENT_MAIN_WINDOW_HIDDEN: &str = "main-window-hidden";
+
     fn show_main_window(window: &WebviewWindow) {
         let _ = position_near_tray(window);
         let _ = window.show();
         let _ = window.set_focus();
+        // 通知前端：面板被唤出，立刻拉一次最新数据
+        let _ = window.emit(EVENT_MAIN_WINDOW_SHOWN, ());
+    }
+
+    fn hide_main_window_inner(window: &WebviewWindow) -> Result<(), String> {
+        window.hide().map_err(|error| error.to_string())?;
+        // 通知前端：面板已隐藏，停掉自动刷新定时器
+        let _ = window.emit(EVENT_MAIN_WINDOW_HIDDEN, ());
+        Ok(())
     }
 
     #[tauri::command]
     fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
-        window.hide().map_err(|error| error.to_string())
+        hide_main_window_inner(&window)
     }
 
     #[tauri::command]
@@ -264,11 +338,10 @@ pub fn run() {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "未配置 API Key".to_string())?;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .get("https://api.deepseek.com/user/balance")
             .bearer_auth(&api_key)
-            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
             .map_err(|error| format!("网络请求失败：{error}"))?;
@@ -362,17 +435,13 @@ pub fn run() {
 
     // 用 token 试调平台用量接口，验证它确实是有效的用量 token。
     async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<(), String> {
-        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                  (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
         let url =
             format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
-        let resp = reqwest::Client::new()
+        let resp = http_client()
             .get(&url)
             .bearer_auth(token)
             .header("x-app-version", "1.0.0")
             .header("Accept", "*/*")
-            .header("User-Agent", ua)
-            .timeout(Duration::from_secs(15))
             .send()
             .await
             .map_err(|error| format!("验证 token 失败：{error}"))?;
@@ -757,15 +826,11 @@ pub fn run() {
             url: &str,
             token: &str,
         ) -> Result<T, String> {
-            let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                      (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
             let resp = client
                 .get(url)
                 .bearer_auth(token)
                 .header("x-app-version", "1.0.0")
                 .header("Accept", "*/*")
-                .header("User-Agent", ua)
-                .timeout(std::time::Duration::from_secs(15))
                 .send()
                 .await
                 .map_err(|error| format!("用量请求失败：{error}"))?;
@@ -796,6 +861,9 @@ pub fn run() {
 
         fn token_breakdown(usage: &[Entry]) -> TokenBreakdown {
             let mut result = TokenBreakdown::default();
+            // PROMPT_TOKEN 表示输入总量，而缓存命中 + 未命中通常就等于输入总量。
+            // 先单独收着，最后再决定要不要并入 total，避免同一批输入被算两遍。
+            let mut prompt_total = 0u64;
             for entry in usage {
                 let value = entry.amount.parse::<f64>().unwrap_or(0.0).round() as u64;
                 match entry.kind.as_str() {
@@ -812,13 +880,19 @@ pub fn run() {
                         result.response += value;
                         result.total += value;
                     }
-                    "PROMPT_TOKEN" => result.total += value,
+                    "PROMPT_TOKEN" => prompt_total += value,
                     kind => {
                         result.other += value;
                         result.total += value;
                         log::warn!("未归类的用量类型 {kind}，已计入 other token：{value}");
                     }
                 }
+            }
+            // 只有当平台没有给出缓存明细时，才用 PROMPT_TOKEN 兜底计入 total。
+            // 若两者并存还累加，输入量会被重复计算。该互斥假设尚未用真实响应验证过，
+            // 保守取"宁可不重复"这一侧；待抓到真实样本后再用测试固化。
+            if result.cache_hit == 0 && result.cache_miss == 0 {
+                result.total += prompt_total;
             }
             result
         }
@@ -864,7 +938,7 @@ pub fn run() {
                 .sum()
         }
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let amount_url =
             format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
         let cost_url =
@@ -999,13 +1073,19 @@ pub fn run() {
             usage_token_captured
         ])
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // 日志在 debug 与 release 都要注册。代码里的 log::warn!（未知模型名、
+            // 未归类 token 类型、配置损坏）在用户机器上必须真正落盘，否则排障只能靠复现。
+            // 默认 target 含 LogDir，落盘位置为 app_log_dir()，
+            // Windows 下即 %LOCALAPPDATA%\com.deepseek.monitor.windows\logs。
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(if cfg!(debug_assertions) {
+                        log::LevelFilter::Info
+                    } else {
+                        log::LevelFilter::Warn
+                    })
+                    .build(),
+            )?;
 
             let show_item = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -1037,7 +1117,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             let is_visible = window.is_visible().unwrap_or(false);
                             if is_visible {
-                                let _ = window.hide();
+                                let _ = hide_main_window_inner(&window);
                             } else {
                                 show_main_window(&window);
                             }
