@@ -1,0 +1,27 @@
+// 单测专用配置。
+//
+// 与根 tsconfig.json 的区别只有三点，都是为了在**不引入任何依赖**的前提下让
+// `node --test --experimental-strip-types` 能直接跑 .ts 测试：
+// 1. 放开 `allowImportingTsExtensions` —— Node 的类型剥离要求 import 写明 `.ts` 后缀，
+//    而应用代码（走 Vite）不带后缀；
+// 2. 不 include 应用源码，只 include 测试文件与它们依赖的纯函数模块；
+// 3. 不要求 DOM lib —— 测试跑在 Node 里，碰 DOM 就是设计错了。
+//
+// 注意：这里刻意不装 @types/node。测试文件用到的 node: 内置模块通过下方的
+// `node-shims.d.ts` 声明最小签名即可，避免为了测试给项目加一条 devDependency。
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": []
+  },
+  "include": ["src/format.ts", "src/format.test.ts", "src/node-shims.d.ts"]
+}

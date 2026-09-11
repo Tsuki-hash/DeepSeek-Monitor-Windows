@@ -121,10 +121,11 @@ API Key 与用量 Token 的配置和清除、开机自启、自动刷新间隔�
 %APPDATA%\DeepSeekMonitorWindows\config.json
 ```
 
-API Key 和用量 Token 都以**明文**存在这个文件里，没有加密。因此：
+API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**（`CryptProtectData`，密文以 `DSM1:` 开头的 base64 串保存）。DPAPI 的密钥绑定当前 Windows 用户与这台机器，因此：
 
-- 不要把它提交到任何仓库，不要分享，也不要备份到云盘。
-- 不要在截图、日志或配置文件里暴露里面的内容。
+- 把 `config.json` 单独拷到别的机器或别的用户下，凭据**解不开**，应用会提示重新填写（其余设置原样保留）。
+- 旧版本（v1.2.1 及更早）留下的明文凭据，在应用首次读取时**自动加密回写**，无需手工处理。
+- 仍然不要把它提交到任何仓库、分享或备份到云盘——加密只防「文件被顺手拿走」，不防「当前用户下的恶意进程」。
 - 在共享电脑上用完，去设置页点 **清除 Key** 和 **清除 Token**。
 
 网页登录产生的 WebView2 缓存位于 `%LOCALAPPDATA%\com.deepseek.monitor.windows\EBWebView`，属于本机运行数据，同样不应提交到仓库。
@@ -160,13 +161,23 @@ npm run tauri:dev
 ```powershell
 npm run tauri:check    # 环境与依赖检查
 npm run check:version  # 校验三处配置里的版本号是否一致
+npm test               # 前端单测（类型 + 用例）
 npm run build          # 类型检查 + 前端构建
 npx tauri build        # 打包 NSIS 安装包
 ```
 
 版本号散落在 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 三处（Tauri 2 的配置不会去读 `package.json`），发版前跑一次 `npm run check:version` 可以避免打出名字对不上的安装包。
 
-推送与 PR 会触发 `.github/workflows/ci.yml`：版本一致性、类型检查与前端构建、`cargo fmt --check`、`cargo check` 与 `cargo clippy -- -D warnings`。
+**测试**：前端用 Node 22 内置的 `node --test` 配合 `--experimental-strip-types` 直接跑 TypeScript 测试，**没有引入 vitest / jest 这类测试框架**（因此也没有新增任何 devDependency）。后端就是标准的 `cargo test`：
+
+```powershell
+npm test                                  # 前端：tsc -p tsconfig.test.json + node --test
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
+```
+
+测试覆盖的是「算错了不容易被发现」的那部分：用量口径（`model_slot` 的模型名映射表、`token_breakdown` 的六类 token 归并与 `PROMPT_TOKEN` 双计边界、`merge_model_slot` 的求和语义）、配置读写（旧配置缺字段回退、损坏配置留证重置、原子写不残留临时文件、凭据加解密与明文迁移）、登录 token 解析（上下文特征匹配、截断输入不崩溃），以及前端的跨月补零与单位换算阈值。改动这些地方时，先跑测试再动手。
+
+推送与 PR 会触发 `.github/workflows/ci.yml`：版本一致性、前端单测、类型检查与前端构建，以及 `cargo fmt --check`、`cargo check`、`cargo clippy -- -D warnings`、`cargo test`。
 
 安装包产物位于 `src-tauri/target/release/bundle/nsis/`。若报 `Visual Studio Build Tools not found`，请安装 Build Tools 2022 并确认勾选了 C++ 组件。
 
@@ -174,12 +185,18 @@ npx tauri build        # 打包 NSIS 安装包
 
 ```text
 DeepSeek-Monitor-Windows/
-├── .github/workflows/           # CI（版本一致性、前端构建、cargo check/clippy）
+├── .github/workflows/           # CI（版本一致性、前端测试与构建、cargo check/clippy/test）
 ├── src/                         # 前端
 │   ├── main.tsx                 # 全部界面：主面板、设置页、详情页
+│   ├── format.ts                # 纯格式化 / 日期工具（有单测）
+│   ├── format.test.ts           # 上述模块的单测
 │   └── styles.css               # 全部样式，含深色 / 浅色两套皮肤
 ├── src-tauri/                   # 后端
-│   ├── src/lib.rs               # 全部命令：API 调用、配置读写、托盘、登录态同步
+│   ├── src/lib.rs               # 命令装配、托盘、窗口显隐、HTTP 请求
+│   ├── src/config.rs            # 配置结构与读写（有单测）
+│   ├── src/credentials.rs       # 凭据的 DPAPI 加解密（有单测）
+│   ├── src/usage.rs             # 用量口径（有单测）
+│   ├── src/token_sync.rs        # 登录 token 抓取与解析（有单测）
 │   ├── tauri.conf.json          # 窗口、打包与安全配置
 │   └── capabilities/            # Tauri 权限
 ├── public/assets/               # 图标与静态资源
@@ -187,7 +204,7 @@ DeepSeek-Monitor-Windows/
 └── screenshots/                 # README 界面截图
 ```
 
-界面是一个单文件（`main.tsx` + `styles.css`），后端也是一个单文件（`lib.rs`）。模型名到界面行的映射集中在 `lib.rs` 的 `model_slot()`，改模型或加模型从那里入手。
+界面是一个单文件（`main.tsx` + `styles.css`），后端按职责分成了几个小模块但都不大。模型名到界面行的映射集中在 `src-tauri/src/usage.rs` 的 `model_slot()`，改模型或加模型从那里入手——它旁边就是覆盖四类模型名的测试，改完立刻能验证。
 
 ## 常见问题
 

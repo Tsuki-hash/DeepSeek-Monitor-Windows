@@ -1,11 +1,24 @@
+pub mod config;
+pub mod credentials;
+pub mod token_sync;
+pub mod usage;
+
+#[cfg(test)]
+mod test_support;
+
+use config::{
+    normalize_refresh_interval_seconds, read_stored_config, to_app_config, write_stored_config,
+    AppConfig,
+};
+use token_sync::{find_webview_cached_usage_token, CacheScanState};
+use usage::{
+    cost_sum, merge_model_slot, model_slot, token_breakdown, Entry, UsageModelSummary, FLASH_SLOT,
+};
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use serde::{Deserialize, Serialize};
     use std::{
-        fs,
-        io::Read,
-        os::windows::fs::OpenOptionsExt,
-        path::{Path, PathBuf},
         process::Command,
         sync::{
             atomic::{AtomicBool, Ordering},
@@ -20,124 +33,6 @@ pub fn run() {
         webview::PageLoadEvent,
         Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
     };
-
-    // 配置缺字段时的默认刷新间隔（秒）。必须走 serde 默认值，不能依赖派生的 Default：
-    // 旧版本写入的或用户手工编辑过的 config.json 少一个字段，就会让反序列化整体失败，
-    // 而 read_stored_config 是所有命令的前置步骤，等于全部功能瘫痪。
-    fn default_refresh_interval_seconds() -> u64 {
-        60
-    }
-
-    // 配置结构版本号。0 表示未标记的历史格式（v1.2.1 及更早写出的文件），
-    // 每次调整 StoredConfig 结构时递增。凭据加密迁移（M-1）需要靠它区分新旧格式，
-    // 只在真有格式差异时才递增，避免无谓的迁移分支。
-    const CONFIG_SCHEMA_VERSION: u32 = 1;
-
-    #[derive(Debug, Default, Clone, Deserialize, Serialize)]
-    struct StoredConfig {
-        // 放在首位，便于人工查看 config.json 时一眼看到格式版本
-        #[serde(default)]
-        version: u32,
-        api_key: Option<String>,
-        #[serde(default)]
-        usage_token: Option<String>,
-        #[serde(default = "default_refresh_interval_seconds")]
-        refresh_interval_seconds: u64,
-        #[serde(default)]
-        auto_refresh_enabled: bool,
-        #[serde(default)]
-        autostart: bool,
-    }
-
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AppConfig {
-        api_key_configured: bool,
-        api_key_preview: Option<String>,
-        usage_token_configured: bool,
-        refresh_interval_seconds: u64,
-        auto_refresh_enabled: bool,
-        autostart: bool,
-        config_path: String,
-    }
-
-    fn config_path() -> Result<PathBuf, String> {
-        let appdata = std::env::var_os("APPDATA").ok_or("APPDATA is not available")?;
-        Ok(PathBuf::from(appdata)
-            .join("DeepSeekMonitorWindows")
-            .join("config.json"))
-    }
-
-    fn read_stored_config() -> Result<StoredConfig, String> {
-        let path = config_path()?;
-        if !path.exists() {
-            return Ok(StoredConfig {
-                refresh_interval_seconds: default_refresh_interval_seconds(),
-                ..StoredConfig::default()
-            });
-        }
-
-        let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        let mut config: StoredConfig = match serde_json::from_str(&text) {
-            Ok(config) => config,
-            Err(error) => {
-                // 配置损坏（半截写入、外部工具改坏、旧格式）不能演变成全链路失效：
-                // 把损坏文件改名留证，回退默认配置继续运行。用户重填一次凭据即可恢复，
-                // 比"设置页一直报错、什么也查不出来"好得多。
-                let stamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_secs())
-                    .unwrap_or(0);
-                let backup = path.with_extension(format!("json.corrupt-{stamp}"));
-                log::warn!(
-                    "配置文件解析失败，已备份到 {} 并重置：{error}",
-                    backup.display()
-                );
-                let _ = fs::rename(&path, &backup);
-                return Ok(StoredConfig {
-                    refresh_interval_seconds: default_refresh_interval_seconds(),
-                    ..StoredConfig::default()
-                });
-            }
-        };
-        config.refresh_interval_seconds =
-            normalize_refresh_interval_seconds(config.refresh_interval_seconds);
-        Ok(config)
-    }
-
-    fn normalize_refresh_interval_seconds(value: u64) -> u64 {
-        match value {
-            60 | 300 | 1800 | 3600 => value,
-            _ => 60,
-        }
-    }
-
-    fn write_stored_config(config: &StoredConfig) -> Result<(), String> {
-        let path = config_path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-
-        // 落盘前统一盖上当前 schema 版本号。所有写入都经过本函数，调用方无需各自维护，
-        // 也就不会出现「某个命令写出的文件没版本号」这种不一致。
-        let stamped = StoredConfig {
-            version: CONFIG_SCHEMA_VERSION,
-            ..config.clone()
-        };
-        let text = serde_json::to_string_pretty(&stamped).map_err(|error| error.to_string())?;
-
-        // 原子写入：先写同目录临时文件再 rename。fs::write 会直接截断目标文件，
-        // 若在写入中途被强杀（Windows 更新、任务管理器结束进程）或断电，会留下半截 JSON，
-        // 下次启动即解析失败。rename 覆盖已存在目标在 Windows 上等效
-        // MoveFileEx(REPLACE_EXISTING)，同卷内是原子操作。
-        let temp_path = path.with_extension("json.tmp");
-        fs::write(&temp_path, text).map_err(|error| error.to_string())?;
-        fs::rename(&temp_path, &path).map_err(|error| {
-            // rename 失败时清理临时文件，避免在配置目录留下垃圾
-            let _ = fs::remove_file(&temp_path);
-            error.to_string()
-        })
-    }
 
     // 全局复用的 HTTP 客户端。reqwest::Client 内含连接池与 TLS 会话，官方建议复用；
     // 每次请求都新建会让每轮自动刷新重做 TCP + TLS 握手。UA 与超时集中在此定义，
@@ -155,49 +50,6 @@ pub fn run() {
                 .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
                 .build()
                 .expect("构建 HTTP 客户端失败")
-        })
-    }
-
-    fn api_key_preview(api_key: &str) -> String {
-        let chars: Vec<char> = api_key.chars().collect();
-        if chars.len() <= 12 {
-            return "已保存".to_string();
-        }
-
-        let start: String = chars.iter().take(7).collect();
-        let end: String = chars
-            .iter()
-            .rev()
-            .take(4)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        format!("{start}...{end}")
-    }
-
-    fn to_app_config(config: StoredConfig) -> Result<AppConfig, String> {
-        let path = config_path()?;
-        let api_key_preview = config
-            .api_key
-            .as_ref()
-            .filter(|value| !value.is_empty())
-            .map(|value| api_key_preview(value));
-
-        let usage_token_configured = config
-            .usage_token
-            .as_ref()
-            .map(|value| !value.is_empty())
-            .unwrap_or(false);
-
-        Ok(AppConfig {
-            api_key_configured: api_key_preview.is_some(),
-            api_key_preview,
-            usage_token_configured,
-            refresh_interval_seconds: config.refresh_interval_seconds,
-            auto_refresh_enabled: config.auto_refresh_enabled,
-            autostart: config.autostart,
-            config_path: path.to_string_lossy().to_string(),
         })
     }
 
@@ -510,85 +362,6 @@ pub fn run() {
         }
     }
 
-    fn read_shared_text(path: &Path) -> Option<String> {
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0x1 | 0x2 | 0x4)
-            .open(path)
-            .ok()?;
-        let metadata = file.metadata().ok()?;
-        if metadata.len() == 0 || metadata.len() > 20 * 1024 * 1024 {
-            return None;
-        }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.read_to_end(&mut bytes).ok()?;
-        Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
-    }
-
-    fn extract_user_api_token(text: &str) -> Option<String> {
-        let mut search_from = 0;
-        let marker = "\"token\":\"";
-        while let Some(relative_index) = text[search_from..].find(marker) {
-            let token_start = search_from + relative_index + marker.len();
-            let token_end = token_start + text[token_start..].find('"')?;
-            let token = &text[token_start..token_end];
-            let context_end = (token_end + 1800).min(text.len());
-            let context = &text[token_end..context_end];
-            if token.len() > 20
-                && context.contains("\"id_profile\"")
-                && context.contains("\"feature_gates\"")
-            {
-                return Some(token.to_string());
-            }
-            search_from = token_end + 1;
-        }
-        None
-    }
-
-    // 轮询缓存目录的去重状态：path -> (文件大小, 修改时间)。
-    // watcher 每 1.5s 扫一次，而缓存目录里绝大多数文件（动辄上万个、单个上限 20MB）在两次
-    // 轮询之间并没有变化。只比对元数据即可判断「读过且没变」，避免反复整读。
-    // 注意不能用「最近 N 分钟」这类时间过滤：用户隔天再点一次同步时，缓存文件可能已经
-    // 是一天前的，按时间过滤会让本来能命中的旧缓存扫不到，那是功能回退。
-    #[derive(Default)]
-    struct CacheScanState {
-        seen: std::collections::HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
-    }
-
-    fn find_webview_cached_usage_token(scan: &mut CacheScanState) -> Option<String> {
-        let local_app_data = std::env::var_os("LOCALAPPDATA")?;
-        let cache_dir = PathBuf::from(local_app_data)
-            .join("com.deepseek.monitor.windows")
-            .join("EBWebView")
-            .join("Default")
-            .join("Cache")
-            .join("Cache_Data");
-        let entries = fs::read_dir(cache_dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            // 取一次元数据同时完成「是否普通文件」与「是否变动」两项判断，比 is_file()
-            // 后再取一次少一次系统调用。
-            let Ok(metadata) = fs::metadata(&path) else {
-                continue;
-            };
-            if !metadata.is_file() {
-                continue;
-            }
-            let stamp = (metadata.len(), metadata.modified().ok());
-            if scan.seen.get(&path) == Some(&stamp) {
-                // 上次已经读过且文件未变动，跳过整读
-                continue;
-            }
-            scan.seen.insert(path.clone(), stamp);
-            if let Some(text) = read_shared_text(&path) {
-                if let Some(token) = extract_user_api_token(&text) {
-                    return Some(token);
-                }
-            }
-        }
-        None
-    }
-
     fn start_usage_title_watcher(app: tauri::AppHandle) {
         thread::spawn(move || {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
@@ -797,39 +570,6 @@ pub fn run() {
         capture_usage_token(&app, value)
     }
 
-    const FLASH_SLOT: &str = "flash";
-    const PRO_SLOT: &str = "pro";
-
-    // 模型名映射。2026-09-10 DeepSeek 上线 V4.1 Flash，模型名改为 deepseek-flash。
-    // 旧名 deepseek-v4-flash / deepseek-v4-flash-vision-exp 对应的模型已下线，但出于
-    // 兼容仍被路由到 V4.1 Flash，因此迁移期内平台可能同时返回新旧名字，必须归并到同一槽位。
-    // deepseek-v4-pro 自 2026-09-14 12:00（北京时间）起同样路由到 V4.1 Flash 并按 Flash
-    // 计价，直到 V4.1 Pro 上线，故暂不删除 pro 槽位，仅作为历史数据承接。
-    fn model_slot(model: &str) -> Option<(&'static str, &'static str)> {
-        match model {
-            "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp" => {
-                Some((FLASH_SLOT, "V4.1 Flash"))
-            }
-            "deepseek-v4-pro" => Some((PRO_SLOT, "V4 Pro")),
-            _ => None,
-        }
-    }
-
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct UsageModelSummary {
-        key: String,
-        name: String,
-        total_tokens: u64,
-        request_count: u64,
-        cache_hit_tokens: u64,
-        cache_miss_tokens: u64,
-        response_tokens: u64,
-        // 平台返回的、当前未归类的 token 类型（如多模态图片输入），已计入 total_tokens
-        other_tokens: u64,
-        cost: f64,
-    }
-
     #[derive(Debug, Serialize)]
     #[serde(rename_all = "camelCase")]
     struct UsageDaySummary {
@@ -866,12 +606,6 @@ pub fn run() {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "未配置用量 Token".to_string())?;
 
-        #[derive(Deserialize)]
-        struct Entry {
-            #[serde(rename = "type")]
-            kind: String,
-            amount: String,
-        }
         #[derive(Deserialize)]
         struct ModelUsage {
             model: String,
@@ -931,99 +665,6 @@ pub fn run() {
             resp.json::<T>()
                 .await
                 .map_err(|error| format!("解析用量数据失败：{error}"))
-        }
-
-        #[derive(Debug, Default)]
-        struct TokenBreakdown {
-            // 总 token = 缓存命中 + 缓存未命中 + 输出 + 未归类
-            total: u64,
-            // 请求数是计次而非计 token，不参与 total 累加
-            request: u64,
-            cache_hit: u64,
-            cache_miss: u64,
-            response: u64,
-            // V4.1 Flash 原生多模态后，平台可能返回当前未归类的 token 类型（如图片输入）。
-            // 保守计入 total，宁可多算也不静默丢数据；单独记录便于前端提示。
-            other: u64,
-        }
-
-        fn token_breakdown(usage: &[Entry]) -> TokenBreakdown {
-            let mut result = TokenBreakdown::default();
-            // PROMPT_TOKEN 表示输入总量，而缓存命中 + 未命中通常就等于输入总量。
-            // 先单独收着，最后再决定要不要并入 total，避免同一批输入被算两遍。
-            let mut prompt_total = 0u64;
-            for entry in usage {
-                let value = entry.amount.parse::<f64>().unwrap_or(0.0).round() as u64;
-                match entry.kind.as_str() {
-                    "REQUEST" => result.request += value,
-                    "PROMPT_CACHE_HIT_TOKEN" => {
-                        result.cache_hit += value;
-                        result.total += value;
-                    }
-                    "PROMPT_CACHE_MISS_TOKEN" => {
-                        result.cache_miss += value;
-                        result.total += value;
-                    }
-                    "RESPONSE_TOKEN" => {
-                        result.response += value;
-                        result.total += value;
-                    }
-                    "PROMPT_TOKEN" => prompt_total += value,
-                    kind => {
-                        result.other += value;
-                        result.total += value;
-                        log::warn!("未归类的用量类型 {kind}，已计入 other token：{value}");
-                    }
-                }
-            }
-            // 只有当平台没有给出缓存明细时，才用 PROMPT_TOKEN 兜底计入 total。
-            // 若两者并存还累加，输入量会被重复计算。该互斥假设尚未用真实响应验证过，
-            // 保守取"宁可不重复"这一侧；待抓到真实样本后再用测试固化。
-            if result.cache_hit == 0 && result.cache_miss == 0 {
-                result.total += prompt_total;
-            }
-            result
-        }
-
-        // 迁移期内同一模型可能有多个名字（deepseek-flash 与旧名并存），必须累加而非覆盖
-        fn merge_model_slot(
-            slot: Option<UsageModelSummary>,
-            key: &str,
-            name: &str,
-            breakdown: &TokenBreakdown,
-            cost: f64,
-        ) -> UsageModelSummary {
-            match slot {
-                Some(mut existing) => {
-                    existing.total_tokens += breakdown.total;
-                    existing.request_count += breakdown.request;
-                    existing.cache_hit_tokens += breakdown.cache_hit;
-                    existing.cache_miss_tokens += breakdown.cache_miss;
-                    existing.response_tokens += breakdown.response;
-                    existing.other_tokens += breakdown.other;
-                    existing.cost += cost;
-                    existing
-                }
-                None => UsageModelSummary {
-                    key: key.to_string(),
-                    name: name.to_string(),
-                    total_tokens: breakdown.total,
-                    request_count: breakdown.request,
-                    cache_hit_tokens: breakdown.cache_hit,
-                    cache_miss_tokens: breakdown.cache_miss,
-                    response_tokens: breakdown.response,
-                    other_tokens: breakdown.other,
-                    cost,
-                },
-            }
-        }
-
-        fn cost_sum(usage: &[Entry]) -> f64 {
-            usage
-                .iter()
-                .filter(|entry| entry.kind != "REQUEST")
-                .map(|entry| entry.amount.parse::<f64>().unwrap_or(0.0))
-                .sum()
         }
 
         let client = http_client();

@@ -902,7 +902,9 @@ button:disabled {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  /* 356px 窗口下每列只有约 34px，柱顶标签（如 268.4K）本身就需要 34~36px。
+     间距从 8px 收到 6px，7 列共多让出 12px，给标签留出余量。 */
+  gap: 6px;
   padding-top: 14px;
 }
 
@@ -916,12 +918,15 @@ button:disabled {
 
 .detail-bar-column span {
   color: rgba(var(--fg), 0.68);
-  max-width: 100%;
-  overflow: hidden;
+  /* 柱顶数值不能裁剪。这一列只有约 34px 宽，而 "268.4K" 需要 ~36px：
+     此前用 max-width:100% + ellipsis 把它裁成了「268….」，恰好是最该看清的数字。
+     改为允许溢出（等宽数字实际只越界 1~2px，不会压到相邻列），并轻微收紧字距补回空间。 */
+  overflow: visible;
+  max-width: none;
   font-size: 10px;
   font-weight: 900;
+  letter-spacing: -0.02em;
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .detail-bar-slot {

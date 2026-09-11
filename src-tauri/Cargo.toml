@@ -25,9 +25,22 @@ tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", features = ["json"] }
+# 凭据加密（M-1）用 DPAPI，密文以 base64 落在 config.json。
+# base64 已经是 Tauri 依赖链里的既有 crate（见 Cargo.lock），不新增编译单元。
+base64 = "0.22"
+
 # Tauri 已间接依赖 tokio，这里只是提为直接依赖以便用 try_join! 并发发起两个用量请求，
 # 不会新增编译单元。
 tokio = { version = "1", features = ["macros"] }
+
+# 凭据加密（M-1）。windows crate 本就是 tauri 的传递依赖（经 tao / webview2-com），
+# 这里提为直接依赖只为拿到 DPAPI（CryptProtectData / CryptUnprotectData），
+# 不新增任何编译单元。仅开 Cryptography 相关 feature，避免拖入整个 Win32 表面。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
 
 # Tauri 官方推荐的 release 配置：体积与内存占用明显下降，代价是全量构建更慢。
 [profile.release]

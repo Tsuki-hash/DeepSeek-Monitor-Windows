@@ -21,6 +21,19 @@ import {
   Zap,
 } from "lucide-react";
 import "./styles.css";
+import {
+  addDays,
+  currencySymbol,
+  dateKey,
+  fmtInt,
+  fmtMoney,
+  fmtTokensShort,
+  mmdd,
+  previousMonth,
+  recentUsageDays,
+  todayStr,
+  type UsageDay,
+} from "./format";
 
 type ViewName = "dashboard" | "settings" | "detail";
 type ModelName = "flash" | "pro";
@@ -54,82 +67,12 @@ type UsageModel = {
   otherTokens: number;
   cost: number;
 };
-type UsageDay = {
-  date: string;
-  flashTokens: number;
-  flashCacheHit: number;
-  flashCacheMiss: number;
-  flashResponse: number;
-  proTokens: number;
-  proCacheHit: number;
-  proCacheMiss: number;
-  proResponse: number;
-  flashOtherTokens: number;
-  proOtherTokens: number;
-  totalTokens: number;
-  totalCost: number;
-};
 type UsageResult = {
   models: UsageModel[];
   days: UsageDay[];
   monthCost: number;
 };
 
-const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
-const fmtTokensShort = (n: number) => {
-  if (n >= 1e8) return (n / 1e6).toFixed(0) + "M";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
-  return String(Math.round(n));
-};
-const fmtMoney = (n: number, symbol = "¥") => symbol + n.toFixed(2);
-// 币种符号的唯一来源。余额来自官方接口、带 currency 字段（正常为 CNY，也存在 USD 账户）；
-// 而用量与消费来自平台内部接口，恒为人民币计价。两者口径不同，所以共享同一面板时必须
-// 用余额的币种符号，否则会出现「余额 $xx 而当日消耗 ¥xx」的矛盾显示。
-const currencySymbol = (currency?: string) => (currency === "USD" ? "$" : "¥");
-const mmdd = (date: string) => {
-  const parts = date.split("-");
-  return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : date;
-};
-const todayStr = () => {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-};
-const dateKey = (date: Date) =>
-  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-const addDays = (date: Date, offset: number) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + offset);
-  return next;
-};
-const recentUsageDays = (days: UsageDay[], count = 7): UsageDay[] => {
-  const source = new Map(days.filter((day) => day.date <= todayStr()).map((day) => [day.date, day]));
-  const today = new Date();
-  return Array.from({ length: count }, (_, index) => {
-    const date = dateKey(addDays(today, index - count + 1));
-    return (
-      source.get(date) ?? {
-        date,
-        flashTokens: 0,
-        flashCacheHit: 0,
-        flashCacheMiss: 0,
-        flashResponse: 0,
-        proTokens: 0,
-        proCacheHit: 0,
-        proCacheMiss: 0,
-        proResponse: 0,
-        flashOtherTokens: 0,
-        proOtherTokens: 0,
-        totalTokens: 0,
-        totalCost: 0,
-      }
-    );
-  });
-};
-const previousMonth = (date: Date) => {
-  const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1);
-  return { month: previous.getMonth() + 1, year: previous.getFullYear() };
-};
 const fetchMonthUsage = (month: number, year: number) => {
   return invoke<UsageResult>("fetch_usage", { month, year });
 };

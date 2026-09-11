@@ -8,6 +8,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "test": "npm run test:types && npm run test:unit",
+    "test:types": "tsc --noEmit -p tsconfig.test.json",
+    "test:unit": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "check:version": "node scripts/check-version.mjs",
     "tauri:check": "powershell -ExecutionPolicy Bypass -File scripts/tauri-check.ps1",
     "tauri:dev": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev.ps1"
