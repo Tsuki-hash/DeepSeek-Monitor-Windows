@@ -139,6 +139,15 @@ API Key 和用量 Token 都以**明文**存在这个文件里，没有加密。�
 
 `npm run tauri:dev` 和 `npm run tauri:check` 会自动探测本机 VS Build Tools 的位置，不需要手动配路径。
 
+### 关于 `scripts/env.ps1`
+
+上面两个命令会先执行 `scripts/env.ps1`。该脚本把 `CARGO_HOME`、`RUSTUP_HOME`、`npm_config_cache` 等工具链缓存目录**重定向到项目父目录**，并覆盖 `TEMP` / `TMP`，目的是让开发环境自包含、不往系统目录里写东西。
+
+需要知道它的两个副作用：
+
+- 执行后，当前终端会话里的 `cargo` 用的不再是系统原有的工具链配置，机器上也会多出 `.cargo` / `.rustup` / `.npm-cache` 等目录；
+- 如果你本机已经配好了 Rust 环境、不想被重定向，**跳过这两个 npm 脚本、直接执行 `npx tauri dev`** 即可，效果一样。
+
 ### 常用命令
 
 ```powershell
@@ -149,9 +158,15 @@ npm run tauri:dev
 ```
 
 ```powershell
-npm run tauri:check   # 环境与依赖检查
-npx tauri build       # 打包 NSIS 安装包
+npm run tauri:check    # 环境与依赖检查
+npm run check:version  # 校验三处配置里的版本号是否一致
+npm run build          # 类型检查 + 前端构建
+npx tauri build        # 打包 NSIS 安装包
 ```
+
+版本号散落在 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 三处（Tauri 2 的配置不会去读 `package.json`），发版前跑一次 `npm run check:version` 可以避免打出名字对不上的安装包。
+
+推送与 PR 会触发 `.github/workflows/ci.yml`：版本一致性、类型检查与前端构建、`cargo fmt --check`、`cargo check` 与 `cargo clippy -- -D warnings`。
 
 安装包产物位于 `src-tauri/target/release/bundle/nsis/`。若报 `Visual Studio Build Tools not found`，请安装 Build Tools 2022 并确认勾选了 C++ 组件。
 
@@ -159,6 +174,7 @@ npx tauri build       # 打包 NSIS 安装包
 
 ```text
 DeepSeek-Monitor-Windows/
+├── .github/workflows/           # CI（版本一致性、前端构建、cargo check/clippy）
 ├── src/                         # 前端
 │   ├── main.tsx                 # 全部界面：主面板、设置页、详情页
 │   └── styles.css               # 全部样式，含深色 / 浅色两套皮肤

@@ -113,6 +113,19 @@ button {
   object-fit: contain;
 }
 
+/* 图标资源加载失败时的占位：同尺寸、不显示裂图。
+   用 --fg 三元组配合透明度，深浅两套皮肤都成立。 */
+.brand-icon-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: rgba(var(--fg), 0.14);
+  color: var(--text-muted);
+  font-size: 0.72em;
+  font-weight: 700;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

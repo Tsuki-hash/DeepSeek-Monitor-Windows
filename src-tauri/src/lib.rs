@@ -9,7 +9,7 @@ pub fn run() {
         process::Command,
         sync::{
             atomic::{AtomicBool, Ordering},
-            Arc, OnceLock,
+            Arc, Mutex, OnceLock,
         },
         thread,
         time::Duration,
@@ -28,8 +28,16 @@ pub fn run() {
         60
     }
 
-    #[derive(Debug, Default, Deserialize, Serialize)]
+    // 配置结构版本号。0 表示未标记的历史格式（v1.2.1 及更早写出的文件），
+    // 每次调整 StoredConfig 结构时递增。凭据加密迁移（M-1）需要靠它区分新旧格式，
+    // 只在真有格式差异时才递增，避免无谓的迁移分支。
+    const CONFIG_SCHEMA_VERSION: u32 = 1;
+
+    #[derive(Debug, Default, Clone, Deserialize, Serialize)]
     struct StoredConfig {
+        // 放在首位，便于人工查看 config.json 时一眼看到格式版本
+        #[serde(default)]
+        version: u32,
         api_key: Option<String>,
         #[serde(default)]
         usage_token: Option<String>,
@@ -110,7 +118,13 @@ pub fn run() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
 
-        let text = serde_json::to_string_pretty(config).map_err(|error| error.to_string())?;
+        // 落盘前统一盖上当前 schema 版本号。所有写入都经过本函数，调用方无需各自维护，
+        // 也就不会出现「某个命令写出的文件没版本号」这种不一致。
+        let stamped = StoredConfig {
+            version: CONFIG_SCHEMA_VERSION,
+            ..config.clone()
+        };
+        let text = serde_json::to_string_pretty(&stamped).map_err(|error| error.to_string())?;
 
         // 原子写入：先写同目录临时文件再 rename。fs::write 会直接截断目标文件，
         // 若在写入中途被强杀（Windows 更新、任务管理器结束进程）或断电，会留下半截 JSON，
@@ -187,10 +201,51 @@ pub fn run() {
         })
     }
 
+    // 最近一次托盘图标所在矩形（物理坐标）。TrayIconEvent::Click 会带上图标在屏幕上的
+    // 真实位置，它比「光标所在显示器的右下角」更可靠：多显示器时光标可能停在另一块屏上，
+    // 旧逻辑会把面板放到错误的屏幕角落。
+    #[derive(Clone, Copy)]
+    struct TrayRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
+    fn tray_rect_store() -> &'static Mutex<Option<TrayRect>> {
+        static STORE: OnceLock<Mutex<Option<TrayRect>>> = OnceLock::new();
+        STORE.get_or_init(|| Mutex::new(None))
+    }
+
+    fn remember_tray_rect(rect: TrayRect) {
+        if let Ok(mut slot) = tray_rect_store().lock() {
+            *slot = Some(rect);
+        }
+    }
+
+    fn last_tray_rect() -> Option<TrayRect> {
+        tray_rect_store().lock().ok().and_then(|slot| *slot)
+    }
+
     fn position_near_tray(window: &WebviewWindow) -> tauri::Result<()> {
-        let cursor = window.cursor_position()?;
+        // 定位锚点优先取托盘图标中心；托盘事件还没发生过（例如从菜单项「显示主面板」
+        // 唤出）时退回光标位置。
+        //
+        // 局限说明：面板仍按工作区右下角摆放，这对「任务栏在底部」这一绝大多数情形
+        // 恰好就是托盘旁边；任务栏在顶部/左侧时位置只是同一块屏幕的右下角，
+        // 尚未做到紧贴托盘图标（那需要按任务栏边缘做四项分支，且只能在真机托盘上验证）。
+        let anchor = last_tray_rect()
+            .map(|rect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+            .or_else(|| {
+                window
+                    .cursor_position()
+                    .ok()
+                    .map(|point| (point.x, point.y))
+            })
+            .ok_or(tauri::Error::WindowNotFound)?;
+
         let monitor = window
-            .monitor_from_point(cursor.x, cursor.y)?
+            .monitor_from_point(anchor.0, anchor.1)?
             .or(window.current_monitor()?)
             .or(window.primary_monitor()?)
             .ok_or_else(|| tauri::Error::WindowNotFound)?;
@@ -425,6 +480,9 @@ pub fn run() {
         }
 
         if let Some(window) = app.get_webview_window("login-sync") {
+            // title 是本机全局可读的侧信道（任意进程可用 EnumWindows + GetWindowText 读到），
+            // 凭据不该在里面停留。主通道写入的 token 必须先抹掉，再关窗口。
+            let _ = window.eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
             let _ = window.close();
         }
 
@@ -487,7 +545,17 @@ pub fn run() {
         None
     }
 
-    fn find_webview_cached_usage_token() -> Option<String> {
+    // 轮询缓存目录的去重状态：path -> (文件大小, 修改时间)。
+    // watcher 每 1.5s 扫一次，而缓存目录里绝大多数文件（动辄上万个、单个上限 20MB）在两次
+    // 轮询之间并没有变化。只比对元数据即可判断「读过且没变」，避免反复整读。
+    // 注意不能用「最近 N 分钟」这类时间过滤：用户隔天再点一次同步时，缓存文件可能已经
+    // 是一天前的，按时间过滤会让本来能命中的旧缓存扫不到，那是功能回退。
+    #[derive(Default)]
+    struct CacheScanState {
+        seen: std::collections::HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
+    }
+
+    fn find_webview_cached_usage_token(scan: &mut CacheScanState) -> Option<String> {
         let local_app_data = std::env::var_os("LOCALAPPDATA")?;
         let cache_dir = PathBuf::from(local_app_data)
             .join("com.deepseek.monitor.windows")
@@ -498,9 +566,20 @@ pub fn run() {
         let entries = fs::read_dir(cache_dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() {
+            // 取一次元数据同时完成「是否普通文件」与「是否变动」两项判断，比 is_file()
+            // 后再取一次少一次系统调用。
+            let Ok(metadata) = fs::metadata(&path) else {
+                continue;
+            };
+            if !metadata.is_file() {
                 continue;
             }
+            let stamp = (metadata.len(), metadata.modified().ok());
+            if scan.seen.get(&path) == Some(&stamp) {
+                // 上次已经读过且文件未变动，跳过整读
+                continue;
+            }
+            scan.seen.insert(path.clone(), stamp);
             if let Some(text) = read_shared_text(&path) {
                 if let Some(token) = extract_user_api_token(&text) {
                     return Some(token);
@@ -514,8 +593,9 @@ pub fn run() {
         thread::spawn(move || {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
             thread::sleep(Duration::from_secs(3));
+            let mut scan = CacheScanState::default();
             for _ in 0..1200 {
-                if let Some(token) = find_webview_cached_usage_token() {
+                if let Some(token) = find_webview_cached_usage_token(&mut scan) {
                     let _ = capture_usage_token(&app, token);
                     return;
                 }
@@ -542,9 +622,9 @@ pub fn run() {
                             if let (Ok(year), Ok(month)) = (y.parse::<u32>(), m.parse::<u32>()) {
                                 let token = tok.to_string();
                                 // 验证 token 真能调用用量接口，过滤登录中途的临时 token
-                                let verified = tauri::async_runtime::block_on(
-                                    verify_usage_token(&token, month, year),
-                                );
+                                let verified = tauri::async_runtime::block_on(verify_usage_token(
+                                    &token, month, year,
+                                ));
                                 if verified.is_ok() {
                                     let _ = capture_usage_token(&app, token);
                                     return;
@@ -572,6 +652,10 @@ pub fn run() {
     // 不再依赖 WebView2 磁盘缓存的延迟落盘。
     const USAGE_SYNC_POLL_JS: &str = r#"
     (function() {
+      // 本脚本作为 initialization_script 在 login-sync 的每次导航都会注入，
+      // 而该窗口允许用户自由跳转。这里先收窄作用域：非平台域名直接不装 hook，
+      // 否则用户在这个窗口里访问任何第三方站点时，其 Authorization 头都会被读到。
+      if (location.host !== 'platform.deepseek.com') return;
       if (window.__dsm_token_hook__) return;
       window.__dsm_token_hook__ = true;
       var done = false;
@@ -647,8 +731,16 @@ pub fn run() {
             flag.store(false, Ordering::SeqCst);
         }
 
-        // 先扫一次缓存：登录完成后重复点击本命令，缓存落盘后即可命中
-        if let Some(token) = find_webview_cached_usage_token() {
+        // 先扫一次缓存：登录完成后重复点击本命令，缓存落盘后即可命中。
+        // 扫描是同步阻塞 IO（逐文件整读，单个上限 20MB），放进 spawn_blocking 执行，
+        // 不占用 async runtime 的工作线程，避免拖住同期的余额/用量请求。
+        let cached_token = tauri::async_runtime::spawn_blocking(|| {
+            find_webview_cached_usage_token(&mut CacheScanState::default())
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(token) = cached_token {
             capture_usage_token(&app, token)?;
             return Ok(true);
         }
@@ -663,31 +755,27 @@ pub fn run() {
         }
 
         let url = tauri::WebviewUrl::External("https://platform.deepseek.com".parse().unwrap());
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            "login-sync",
-            url,
-        )
-        .title("DeepSeek 账号登录")
-        .inner_size(480.0, 720.0)
-        .min_inner_size(360.0, 480.0)
-        .resizable(true)
-        .center()
-        .visible(true)
-        .initialization_script(USAGE_SYNC_POLL_JS)
-        .on_page_load(|window, payload| {
-            if matches!(payload.event(), PageLoadEvent::Finished)
-                && payload
-                    .url()
-                    .host_str()
-                    .is_some_and(|host| host == "platform.deepseek.com")
-            {
-                // 双保险：万一 initialization_script 未注入，页面加载完再装一次 hook
-                let _ = window.eval(USAGE_SYNC_POLL_JS);
-            }
-        })
-        .build()
-        .map_err(|error| format!("打开登录窗口失败：{error}"))?;
+        tauri::WebviewWindowBuilder::new(&app, "login-sync", url)
+            .title("DeepSeek 账号登录")
+            .inner_size(480.0, 720.0)
+            .min_inner_size(360.0, 480.0)
+            .resizable(true)
+            .center()
+            .visible(true)
+            .initialization_script(USAGE_SYNC_POLL_JS)
+            .on_page_load(|window, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished)
+                    && payload
+                        .url()
+                        .host_str()
+                        .is_some_and(|host| host == "platform.deepseek.com")
+                {
+                    // 双保险：万一 initialization_script 未注入，页面加载完再装一次 hook
+                    let _ = window.eval(USAGE_SYNC_POLL_JS);
+                }
+            })
+            .build()
+            .map_err(|error| format!("打开登录窗口失败：{error}"))?;
         start_usage_title_watcher(app);
         Ok(false)
     }
@@ -944,8 +1032,13 @@ pub fn run() {
         let cost_url =
             format!("https://platform.deepseek.com/api/v0/usage/cost?month={month}&year={year}");
 
-        let amount: AmountResp = get_json(&client, &amount_url, &token).await?;
-        let cost: CostResp = get_json(&client, &cost_url, &token).await?;
+        // 两个端点互相独立、同一 token，串行等待会让总延迟等于两者之和（各自含 15s 超时上限）。
+        // 并发发起后总延迟约等于较慢的那个；配合复用的 Client 还能共享连接握手。
+        // 注意 http_client() 返回的已是 &Client，这里直接传 client，不要再取一次引用。
+        let (amount, cost): (AmountResp, CostResp) = tokio::try_join!(
+            get_json(client, &amount_url, &token),
+            get_json(client, &cost_url, &token),
+        )?;
 
         let cost_total = cost.data.biz_data.first();
         let cost_for_model = |model: &str| -> f64 {
@@ -967,9 +1060,21 @@ pub fn run() {
             let breakdown = token_breakdown(&model_usage.usage);
             let cost = cost_for_model(&model_usage.model);
             if slot == FLASH_SLOT {
-                flash_sum = Some(merge_model_slot(flash_sum.take(), slot, display, &breakdown, cost));
+                flash_sum = Some(merge_model_slot(
+                    flash_sum.take(),
+                    slot,
+                    display,
+                    &breakdown,
+                    cost,
+                ));
             } else {
-                pro_sum = Some(merge_model_slot(pro_sum.take(), slot, display, &breakdown, cost));
+                pro_sum = Some(merge_model_slot(
+                    pro_sum.take(),
+                    slot,
+                    display,
+                    &breakdown,
+                    cost,
+                ));
             }
         }
 
@@ -1106,21 +1211,39 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    // 仅在左键“抬起”时切换；否则按下+抬起各触发一次，窗口会闪现后立即隐藏
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
+                    // 任何一次托盘点击都带着图标的实际矩形（左右键都有），先无条件记下来。
+                    // 右键走的是菜单路径「显示主面板」，也需要这个位置。
+                    let TrayIconEvent::Click {
+                        rect,
+                        button,
+                        button_state,
                         ..
                     } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let is_visible = window.is_visible().unwrap_or(false);
-                            if is_visible {
-                                let _ = hide_main_window_inner(&window);
-                            } else {
-                                show_main_window(&window);
-                            }
+                    else {
+                        return;
+                    };
+
+                    let origin = rect.position.to_physical::<f64>(1.0);
+                    let size = rect.size.to_physical::<f64>(1.0);
+                    remember_tray_rect(TrayRect {
+                        x: origin.x,
+                        y: origin.y,
+                        width: size.width,
+                        height: size.height,
+                    });
+
+                    // 仅在左键“抬起”时切换；否则按下+抬起各触发一次，窗口会闪现后立即隐藏
+                    if button != MouseButton::Left || button_state != MouseButtonState::Up {
+                        return;
+                    }
+
+                    let app = tray.app_handle();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let is_visible = window.is_visible().unwrap_or(false);
+                        if is_visible {
+                            let _ = hide_main_window_inner(&window);
+                        } else {
+                            show_main_window(&window);
                         }
                     }
                 });
