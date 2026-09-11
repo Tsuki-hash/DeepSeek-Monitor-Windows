@@ -121,11 +121,12 @@ Configure and clear the API key and usage token, autostart on login, refresh int
 %APPDATA%\DeepSeekMonitorWindows\config.json
 ```
 
-Both the API key and the usage token are stored in this file **as plain text**, with no encryption. Therefore:
+Both the API key and the usage token are stored in this file, **encrypted with Windows DPAPI** (`CryptProtectData`; the ciphertext is kept as a base64 string prefixed with `DSM1:`). DPAPI ties the key to the current Windows user and this machine, which means:
 
-- Do not commit it to any repository, share it, or back it up to cloud storage.
-- Do not expose its contents in screenshots, logs, or configuration files.
-- On a shared computer, clear it when you are done using **清除 Key** and **清除 Token** in Settings.
+- Copying `config.json` alone to another machine or another user account makes the credentials **undecryptable**; the app then asks you to re-enter them (all other settings are preserved).
+- Plaintext credentials left behind by older versions (v1.2.1 and earlier) are **re-encrypted automatically** the first time the app reads them — no manual step needed.
+- Still do not commit it to any repository, share it, or back it up to cloud storage — encryption only guards against the file being taken, not against a malicious process running as the current user.
+- On a shared computer, clear credentials when you are done using **清除 Key** and **清除 Token** in Settings.
 
 The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepseek.monitor.windows\EBWebView`. It is local runtime data and should not be committed either.
 
@@ -160,13 +161,23 @@ npm run tauri:dev
 ```powershell
 npm run tauri:check    # environment and dependency check
 npm run check:version  # verify the version number is consistent across config files
+npm test               # frontend tests (types + cases)
 npm run build          # type check + frontend build
 npx tauri build        # build the NSIS installer
 ```
 
 The version number lives in three places — `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` (Tauri 2 does not read `package.json`). Running `npm run check:version` before a release prevents shipping an installer whose name does not match its contents.
 
-Pushes and pull requests run `.github/workflows/ci.yml`: version consistency, type check and frontend build, `cargo fmt --check`, `cargo check`, and `cargo clippy -- -D warnings`.
+**Tests**: the frontend runs TypeScript tests directly through Node 22's built-in `node --test` with `--experimental-strip-types`, so **no test framework such as vitest or jest is involved** — and no devDependency was added for it. The backend is plain `cargo test`:
+
+```powershell
+npm test                                  # frontend: tsc -p tsconfig.test.json + node --test
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # backend
+```
+
+Coverage targets the things that break silently: usage accounting (the model-name table in `model_slot`, the six token kinds and the `PROMPT_TOKEN` double-count boundary in `token_breakdown`, the additive semantics of `merge_model_slot`), config I/O (missing fields in old configs falling back to defaults, corrupt configs being quarantined and reset, atomic writes leaving no temp file, credential encryption and plaintext migration), login token parsing (context-feature matching, truncated input not crashing), and the frontend's cross-month padding and unit thresholds. Change any of those and run the tests first.
+
+Pushes and pull requests run `.github/workflows/ci.yml`: version consistency, frontend tests, type check and frontend build, plus `cargo fmt --check`, `cargo check`, `cargo clippy -- -D warnings`, and `cargo test`.
 
 The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see `Visual Studio Build Tools not found`, install Build Tools 2022 and confirm the C++ workload is selected.
 
@@ -174,12 +185,18 @@ The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see
 
 ```text
 DeepSeek-Monitor-Windows/
-├── .github/workflows/           # CI (version consistency, frontend build, cargo check/clippy)
+├── .github/workflows/           # CI (version consistency, frontend tests + build, cargo check/clippy/test)
 ├── src/                         # Frontend
 │   ├── main.tsx                 # The entire UI: dashboard, settings, detail page
+│   ├── format.ts                # Pure formatting / date helpers (unit tested)
+│   ├── format.test.ts           # Tests for the above
 │   └── styles.css               # All styles, including dark and light skins
 ├── src-tauri/                   # Backend
-│   ├── src/lib.rs               # All commands: API calls, config I/O, tray, login sync
+│   ├── src/lib.rs               # Command wiring, tray, window visibility, HTTP requests
+│   ├── src/config.rs            # Config structs and I/O (unit tested)
+│   ├── src/credentials.rs       # DPAPI encryption of credentials (unit tested)
+│   ├── src/usage.rs             # Usage accounting (unit tested)
+│   ├── src/token_sync.rs        # Login token capture and parsing (unit tested)
 │   ├── tauri.conf.json          # Window, bundle, and security configuration
 │   └── capabilities/            # Tauri permissions
 ├── public/assets/               # Icons and static assets
@@ -187,7 +204,7 @@ DeepSeek-Monitor-Windows/
 └── screenshots/                 # README screenshots
 ```
 
-The UI is one file (`main.tsx` plus `styles.css`) and the backend is one file (`lib.rs`). The mapping from model name to dashboard row lives in `model_slot()` in `lib.rs` — that is where to start when changing or adding a model.
+The UI is one file (`main.tsx` plus `styles.css`); the backend is split into a few small modules. The mapping from model name to dashboard row lives in `model_slot()` in `src-tauri/src/usage.rs` — that is where to start when changing or adding a model, and the test covering all four model names sits right next to it.
 
 ## FAQ
 

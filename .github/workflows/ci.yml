@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: frontend (version + typecheck + build)
+    name: frontend (version + typecheck + test + build)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,11 +31,17 @@ jobs:
       - name: Check version consistency
         run: npm run check:version
 
+      # 前端单测走 Node 22 内置的 `node --test --experimental-strip-types`，
+      # 不需要 vitest / jest 这类测试框架；test:types 单独用 tsconfig.test.json
+      # 检查测试文件的类型（测试 import 带 .ts 后缀，与应用构建的配置不同）。
+      - name: Frontend tests
+        run: npm test
+
       - name: Type check and build
         run: npm run build
 
   rust:
-    name: rust (fmt + check + clippy)
+    name: rust (fmt + check + clippy + test)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,3 +62,8 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      # 用量口径（model_slot / token_breakdown / merge_model_slot）与配置读写
+      # 的回归防线。这两块是历次口径调整最容易出问题的地方。
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
