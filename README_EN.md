@@ -28,7 +28,7 @@ This project combines three things:
 
 ### Install
 
-Download `DeepSeekMonitorWindows_1.2.1_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest). Installing over an older version does not require uninstalling it first.
+Download `DeepSeekMonitorWindows_1.2.2_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest). Installing over an older version does not require uninstalling it first.
 
 Requirements: Windows 10 or Windows 11, plus the Microsoft Edge WebView2 Runtime (included with Windows 11; install separately on Windows 10 if missing).
 
@@ -138,17 +138,6 @@ The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepsee
 - Rust 1.77.2+, MSVC toolchain recommended
 - Visual Studio Build Tools 2022 with `Desktop development with C++`
 
-`npm run tauri:dev` and `npm run tauri:check` detect your Visual Studio Build Tools installation automatically, so no paths need to be configured by hand.
-
-### About `scripts/env.ps1`
-
-Both commands above run `scripts/env.ps1` first. That script redirects the toolchain caches (`CARGO_HOME`, `RUSTUP_HOME`, `npm_config_cache`, …) to the project's parent directory and also overrides `TEMP` / `TMP`, so the development environment stays self-contained and writes nothing into system directories.
-
-Two side effects are worth knowing:
-
-- After it runs, `cargo` in that terminal session no longer uses your system toolchain configuration, and directories such as `.cargo` / `.rustup` / `.npm-cache` appear next to the project.
-- If you already have a working Rust setup and would rather not be redirected, **skip these two npm scripts and run `npx tauri dev` directly** — the result is the same.
-
 ### Commands
 
 ```powershell
@@ -159,12 +148,14 @@ npm run tauri:dev
 ```
 
 ```powershell
-npm run tauri:check    # environment and dependency check
+npm run tauri:check    # cargo check (all targets)
 npm run check:version  # verify the version number is consistent across config files
 npm test               # frontend tests (types + cases)
 npm run build          # type check + frontend build
-npx tauri build        # build the NSIS installer
+npm run tauri:build    # build the NSIS installer
 ```
+
+`npm run tauri:dev` and `npm run tauri:build` are thin wrappers around `tauri dev` / `tauri build` that detect your Visual Studio Build Tools installation automatically, so no paths need to be configured by hand. Calling `npx tauri dev` directly works just as well.
 
 The version number lives in three places — `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` (Tauri 2 does not read `package.json`). Running `npm run check:version` before a release prevents shipping an installer whose name does not match its contents.
 
@@ -200,7 +191,7 @@ DeepSeek-Monitor-Windows/
 │   ├── tauri.conf.json          # Window, bundle, and security configuration
 │   └── capabilities/            # Tauri permissions
 ├── public/assets/               # Icons and static assets
-├── scripts/                     # Windows development scripts
+├── scripts/check-version.mjs     # verifies the three version numbers agree
 └── screenshots/                 # README screenshots
 ```
 
@@ -229,6 +220,14 @@ Balance and usage are each requested once in three situations: when you open the
 ## Version history
 
 See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) for the complete history. `v1.0.0` through `v1.1.0` were published by [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows); this repository took over from `v1.2.1`.
+
+### v1.2.2
+
+- **Credentials are now encrypted at rest**: the API key and usage token are written to `config.json` encrypted with Windows DPAPI. The key is tied to the current user and machine, so a copied config file cannot be decrypted; plaintext credentials left by older versions are re-encrypted automatically on first read.
+- **Regression tests added**: 54 backend and 18 frontend unit tests, run by CI on every push.
+- **Fixed truncated bar-top values** on the detail page: at a 356px window width the daily bar chart labels are no longer clipped to `268….`.
+- A batch of smaller fixes: corrupt-config quarantine and fallback, refresh semantics, chart keyboard accessibility.
+- Installer `DeepSeekMonitorWindows_1.2.2_x64-setup.exe`.
 
 ### v1.2.1
 
