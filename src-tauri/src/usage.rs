@@ -52,10 +52,10 @@ pub struct TokenBreakdown {
 
 /// 把一组原始条目归并成结构化的 token 明细。
 ///
-/// `PROMPT_TOKEN` 的处理是这里唯一的微妙点：它表示输入总量，而缓存命中 + 未命中通常
-/// 就等于输入总量。若两者并存还累加，输入量会被重复计算。目前的策略是「有明细就不用总量
-/// 兜底」，即偏保守地不重复。该互斥假设尚未用真实响应验证过——见本模块单测
-/// `prompt_token_与明细并存_不重复计入`，抓真实样本后只需改那一处断言即可反向确认。
+/// `PROMPT_TOKEN` 表示输入总量，缓存命中 + 未命中通常就是输入总量。若两者并存还累加
+/// 会把输入量算两遍。**定稿口径（保守）**：有缓存明细时不用 `PROMPT_TOKEN` 兜底；
+/// 只有平台只给了 `PROMPT_TOKEN` 时才计入 total。与明细数值不一致时打 warn 便于排障，
+/// 不改变归并规则。该规则由单测锁定，改动前先改测试。
 pub fn token_breakdown(usage: &[Entry]) -> TokenBreakdown {
     let mut result = TokenBreakdown::default();
     let mut prompt_total = 0u64;
@@ -274,9 +274,9 @@ mod tests {
 
     #[test]
     fn prompt_token_与明细并存_不重复计入() {
-        // L-16 的双计边界，也是当前实现里唯一「未经真实样本验证」的假设。
-        // 若平台实际同时返回三者且 PROMPT_TOKEN ≠ HIT + MISS，输入量会被**少计**；
-        // 拿到真实响应样本后，把这里的 500 改成实际期望值即可反向确认真伪。
+        // 定稿口径：有 HIT/MISS 明细时 PROMPT_TOKEN 只作参考，不进 total。
+        // 若平台出现「有明细且 PROMPT ≠ HIT+MISS」的样本，以本断言为准（保守不双计），
+        // 同时看日志里的 warn 做人工核对。
         let b = token_breakdown(&[
             entry("PROMPT_TOKEN", "300.0"),
             entry("PROMPT_CACHE_HIT_TOKEN", "100.0"),
