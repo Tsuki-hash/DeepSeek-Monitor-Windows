@@ -222,7 +222,7 @@ function App() {
     }
     // 自动刷新属于后台更新，走静默模式。
     // 用 setTimeout 链而非 setInterval：睡眠唤醒后 interval 可能连发补帧，
-    // 链式调度总是等上一次结束后再计时（P2-06）。
+    // 链式调度总是等上一次结束后再计时，避免睡眠唤醒后 interval 连发补帧。
     let cancelled = false;
     let timer = 0;
     const schedule = () => {
@@ -303,7 +303,7 @@ function BrandIcon({ size = 32 }: { size?: number }) {
     <div className="brand-icon" style={{ width: size, height: size }}>
       {failed ? (
         <span className="brand-icon-fallback" aria-hidden="true">
-          R
+          DS
         </span>
       ) : (
         <img
@@ -505,7 +505,7 @@ function UsageRow({
   onClick: () => void;
 }) {
   const isFlash = modelKey === "flash";
-  // 显示名优先取后端 model_slot 的 name（P2-03）
+  // 显示名优先取后端 model_slot 的 name，避免前后端双源漂移
   const name = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
   const tokensText = data
     ? `${fmtInt(data.totalTokens)} Tokens`
@@ -866,7 +866,7 @@ function SettingsPanel({
         setStatus(`验证通过，当前余额 ${symbol}${balance.totalBalance}${tip}`);
       })
       .catch((error) => {
-        // 保存已成功、仅后续验证失败时不能笼统说「保存或验证失败」（P2-04）
+        // 保存已成功、仅后续验证失败时不能笼统说「保存或验证失败」
         const message = typeof error === "string" ? error : "验证失败";
         setStatus(`Key 已保存，但验证未通过：${message}`);
       })
@@ -1183,7 +1183,7 @@ function ModelDetailPanel({
 }) {
   const isFlash = model === "flash";
   const data = usage?.models.find((item) => item.key === model) ?? null;
-  // 显示名以后端 model_slot 为准，避免前后端双源漂移（P2-03）
+  // 显示名以后端 model_slot 为准，避免前后端双源漂移
   const title = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
   const tintClass = isFlash ? "flash" : "pro";
   const cost = data ? fmtMoney(data.cost) : "—";

@@ -38,15 +38,9 @@ pub fn apply_autostart(enabled: bool) -> Result<(), String> {
     reg_delete_value()
 }
 
-/// 注册表与配置需保持一致：配置写入失败时回滚注册表，避免「已自启但设置显示关」。
-pub fn apply_autostart_with_rollback(enabled: bool, persist_ok: bool) -> Result<(), String> {
-    if enabled && !persist_ok {
-        reg_delete_value()?;
-        return Err("开机自启配置保存失败，已回滚注册表".to_string());
-    }
-    if !enabled && !persist_ok {
-        // 关闭方向：配置失败则恢复注册表值为开
-        return apply_autostart(true).map_err(|error| format!("回滚开机自启失败：{error}"));
-    }
-    Ok(())
+/// 配置落盘失败后的注册表回滚：把 Run 键恢复成「与用户刚才点选相反」的状态，
+/// 避免「已自启但设置显示关」或反过来。`attempted` 为本次尝试写入的目标状态。
+pub fn rollback_autostart(attempted: bool) -> Result<(), String> {
+    // 开启失败落盘 → 注册表应关掉；关闭失败落盘 → 注册表应再打开
+    apply_autostart(!attempted).map_err(|error| format!("回滚开机自启失败：{error}"))
 }

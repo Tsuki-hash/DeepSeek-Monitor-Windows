@@ -151,7 +151,9 @@ npm run tauri:dev
 npm run tauri:check    # cargo check（全部 target）
 npm run check:version  # 校验三处配置里的版本号是否一致
 npm test               # 前端单测（类型 + 用例）
+npm run lint           # ESLint
 npm run build          # 类型检查 + 前端构建
+npm run verify         # 本地一键门禁（需 PowerShell 7+）
 npm run tauri:build    # 打包 NSIS 安装包
 ```
 
@@ -168,7 +170,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
 
 测试覆盖的是「算错了不容易被发现」的那部分：用量口径（`model_slot` 的模型名映射表、`token_breakdown` 的六类 token 归并与 `PROMPT_TOKEN` 双计边界、`merge_model_slot` 的求和语义）、配置读写（旧配置缺字段回退、损坏配置留证重置、原子写不残留临时文件、凭据加解密与明文迁移）、登录 token 解析（上下文特征匹配、截断输入不崩溃），以及前端的跨月补零与单位换算阈值。改动这些地方时，先跑测试再动手。
 
-推送与 PR 会触发 `.github/workflows/ci.yml`：版本一致性、前端单测、类型检查与前端构建，以及 `cargo fmt --check`、`cargo check`、`cargo clippy -- -D warnings`、`cargo test`。
+本仓库**不再启用 GitHub Actions**。推送前请在本地跑一次 `npm run verify`（PowerShell 7+）：依次执行版本一致性、前端测试/lint/构建，以及 `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo test`。
 
 安装包产物位于 `src-tauri/target/release/bundle/nsis/`。若报 `Visual Studio Build Tools not found`，请安装 Build Tools 2022 并确认勾选了 C++ 组件。
 
@@ -176,7 +178,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
 
 ```text
 DeepSeek-Monitor-Windows/
-├── .github/workflows/           # CI（版本一致性、前端测试与构建、cargo check/clippy/test）
+├── scripts/                     # check-version.mjs、verify.ps1（本地门禁）
 ├── src/                         # 前端
 │   ├── main.tsx                 # 全部界面：主面板、设置页、详情页
 │   ├── format.ts                # 纯格式化 / 日期工具（有单测）

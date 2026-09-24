@@ -10,7 +10,7 @@ pub mod window_pos;
 #[cfg(test)]
 mod test_support;
 
-use autostart::{apply_autostart, apply_autostart_with_rollback};
+use autostart::{apply_autostart, rollback_autostart};
 use config::{
     edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
@@ -212,7 +212,7 @@ pub fn run() {
         let stored = match persisted {
             Ok(stored) => stored,
             Err(error) => {
-                let _ = apply_autostart_with_rollback(autostart, false);
+                let _ = rollback_autostart(autostart);
                 return Err(error);
             }
         };
@@ -555,7 +555,7 @@ pub fn run() {
         year: u32,
     ) -> Result<UsageResult, String> {
         require_main(&window)?;
-        // P2-13：拒绝非法月份，避免把垃圾参数打进平台接口
+        // 拒绝非法月份，避免把垃圾参数打进平台接口
         if !(1..=12).contains(&month) || !(2020..=2100).contains(&year) {
             return Err("非法的月份或年份".to_string());
         }
@@ -578,7 +578,7 @@ pub fn run() {
             }
         }))
         .manage(Arc::new(AtomicBool::new(false)))
-        // P1-01：watcher 代际号。每次 start_usage_sync 建窗时 +1，旧 watcher 发现
+        // watcher 代际号。每次 start_usage_sync 建窗时 +1，旧 watcher 发现
         // 代际不匹配则退出，避免关窗后 1.5s 内再点同步拉起双 watcher。
         .manage(Arc::new(AtomicU64::new(0)))
         .invoke_handler(tauri::generate_handler![

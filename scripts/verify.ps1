@@ -1,6 +1,7 @@
 # 本地一键验证（替代已取消的 GitHub CI）。
 # 用法：pwsh -File scripts/verify.ps1
-# 需要：Node 22+、Rust MSVC 工具链。
+# 需要：PowerShell 7+（pwsh）、Node 22+、Rust MSVC 工具链。
+# Windows PowerShell 5.1 不支持本脚本的调用方式，请安装 PowerShell 7。
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
