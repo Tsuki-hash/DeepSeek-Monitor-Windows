@@ -84,8 +84,16 @@ pub fn token_breakdown(usage: &[Entry]) -> TokenBreakdown {
         }
     }
     // 只有当平台没有给出缓存明细时，才用 PROMPT_TOKEN 兜底计入 total。
+    // P2-01：若三者并存且 HIT+MISS ≠ PROMPT_TOKEN，记 warn 方便抓真实样本反推口径。
     if result.cache_hit == 0 && result.cache_miss == 0 {
         result.total += prompt_total;
+    } else if prompt_total > 0 {
+        let detailed = result.cache_hit + result.cache_miss;
+        if detailed != prompt_total {
+            log::warn!(
+                "PROMPT_TOKEN({prompt_total}) 与缓存明细({detailed})不一致，已按明细口径计入 total"
+            );
+        }
     }
     result
 }

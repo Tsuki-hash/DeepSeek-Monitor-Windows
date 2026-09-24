@@ -8,7 +8,6 @@ import {
   Brain,
   CalendarDays,
   CheckCircle2,
-  Clipboard,
   CreditCard,
   Info,
   KeyRound,
@@ -25,7 +24,6 @@ import {
   addDays,
   chartPointFromDay,
   currencySymbol,
-  dateKey,
   fmtInt,
   fmtMoney,
   fmtTokensShort,
@@ -1020,6 +1018,9 @@ function SettingsPanel({
             <button className="primary" onClick={saveApiKey} disabled={busy || !apiKey.trim()}>
               验证并保存
             </button>
+            <button className="secondary" onClick={pasteApiKey} disabled={busy}>
+              粘贴
+            </button>
             <span className={config?.apiKeyConfigured ? "configured" : "configured muted-status"}>
               <CheckCircle2 size={17} />
               {config?.apiKeyConfigured ? "已配置" : "未配置"}
@@ -1028,6 +1029,7 @@ function SettingsPanel({
               清除 Key
             </button>
           </div>
+          <p className="muted">{status}</p>
         </SettingsSection>
 
         <SettingsSection icon={<BarChart3 size={15} />} title="用量同步 Token">
@@ -1071,6 +1073,9 @@ function SettingsPanel({
               <div className="settings-actions">
                 <button className="primary" onClick={saveUsageToken} disabled={busy || !usageToken.trim()}>
                   保存 Token
+                </button>
+                <button className="secondary" onClick={pasteUsageToken} disabled={busy}>
+                  粘贴
                 </button>
               </div>
             </>

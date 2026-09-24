@@ -2,6 +2,7 @@ pub mod config;
 pub mod credentials;
 pub mod token_sync;
 pub mod usage;
+pub mod window_pos;
 
 #[cfg(test)]
 mod test_support;
@@ -80,11 +81,7 @@ pub fn run() {
 
     fn position_near_tray(window: &WebviewWindow) -> tauri::Result<()> {
         // 定位锚点优先取托盘图标中心；托盘事件还没发生过（例如从菜单项「显示主面板」
-        // 唤出）时退回光标位置。
-        //
-        // 局限说明：面板仍按工作区右下角摆放，这对「任务栏在底部」这一绝大多数情形
-        // 恰好就是托盘旁边；任务栏在顶部/左侧时位置只是同一块屏幕的右下角，
-        // 尚未做到紧贴托盘图标（那需要按任务栏边缘做四项分支，且只能在真机托盘上验证）。
+        // 唤出）时退回光标位置。按锚点最近的工作区边贴靠（P2-12，几何在 window_pos）。
         let anchor = last_tray_rect()
             .map(|rect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
             .or_else(|| {
@@ -105,17 +102,22 @@ pub fn run() {
         let scale_factor = monitor.scale_factor();
         let size = window.outer_size()?;
         let margin = (12.0 * scale_factor).round() as i32;
-        let width = size.width as i32;
-        let height = size.height as i32;
-        let right = work_area.position.x + work_area.size.width as i32;
-        let bottom = work_area.position.y + work_area.size.height as i32;
-        let x = right - width - margin;
-        let y = bottom - height - margin;
+        let area = window_pos::WorkArea {
+            x: work_area.position.x,
+            y: work_area.position.y,
+            width: work_area.size.width as i32,
+            height: work_area.size.height as i32,
+        };
+        let (x, y) = window_pos::panel_origin(
+            area,
+            size.width as i32,
+            size.height as i32,
+            margin,
+            anchor.0,
+            anchor.1,
+        );
 
-        window.set_position(Position::Physical(PhysicalPosition::new(
-            x.max(work_area.position.x),
-            y.max(work_area.position.y),
-        )))
+        window.set_position(Position::Physical(PhysicalPosition::new(x, y)))
     }
 
     // 面板显隐事件。窗口隐藏不会卸载 WebView，前端的 setInterval 不会自己停；
