@@ -19,6 +19,7 @@ import {
   fmtMoney,
   fmtTokensShort,
   mmdd,
+  nextLoadStateAfterError,
   previousMonth,
   recentUsageDays,
   todayStr,
@@ -224,6 +225,13 @@ test("chartPointFromDay：all 在 totalTokens 缺失时退回分段和", () => {
   const point = chartPointFromDay(sample, "all");
   assert.equal(point.total, 15);
   assert.equal(point.other, 5);
+});
+
+test("nextLoadStateAfterError：silent 保留 ok，否则标 error/nokey", () => {
+  assert.equal(nextLoadStateAfterError("ok", true, "网络失败"), "ok");
+  assert.equal(nextLoadStateAfterError("ok", false, "网络失败"), "error");
+  assert.equal(nextLoadStateAfterError("loading", true, "未配置用量 Token"), "nokey");
+  assert.equal(nextLoadStateAfterError("error", true, "未配置 API Key"), "nokey");
 });
 
 test("chartPointFromDay：单模型不含未识别模型差额", () => {

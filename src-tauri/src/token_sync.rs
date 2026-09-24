@@ -80,18 +80,43 @@ pub fn extract_user_api_token(text: &str) -> Option<String> {
 }
 
 /// 轮询缓存目录的去重状态：path -> (文件大小, 修改时间)。
-/// watcher 每 1.5s 扫一次，而缓存目录里绝大多数文件（动辄上万个、单个上限 20MB）在两次
-/// 轮询之间并没有变化。只比对元数据即可判断「读过且没变」，避免反复整读。
-/// 注意不能用「最近 N 分钟」这类时间过滤：用户隔天再点一次同步时，缓存文件可能已经
-/// 是一天前的，按时间过滤会让本来能命中的旧缓存扫不到，那是功能回退。
+/// watcher 周期扫一次，而缓存目录里绝大多数文件在两次轮询之间并没有变化。
+/// 只比对元数据即可判断「读过且没变」，避免反复整读。
 #[derive(Default)]
 pub struct CacheScanState {
     seen: HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
+    /// 插入顺序，用于超限时淘汰最旧一批，而不是整表清空导致全部重读。
+    order: Vec<PathBuf>,
 }
 
-/// `seen` 表项上限。缓存目录文件极多时无限增长会拖慢每次扫描；
-/// 超限后整表清空，代价是短暂重读一遍，远好于无界膨胀。
+/// `seen` 表项上限。超过后淘汰最旧的 1/4，保留近期文件的去重信息。
 const MAX_SEEN_ENTRIES: usize = 50_000;
+
+fn mark_seen(
+    scan: &mut CacheScanState,
+    path: PathBuf,
+    stamp: (u64, Option<std::time::SystemTime>),
+) {
+    if !scan.seen.contains_key(&path) {
+        scan.order.push(path.clone());
+    }
+    scan.seen.insert(path, stamp);
+}
+
+fn evict_oldest_quarter(scan: &mut CacheScanState) {
+    let drop = scan.order.len() / 4;
+    for _ in 0..drop {
+        if let Some(old) = scan.order.first().cloned() {
+            scan.order.remove(0);
+            scan.seen.remove(&old);
+        } else {
+            break;
+        }
+    }
+    if scan.order.is_empty() && !scan.seen.is_empty() {
+        scan.seen.clear();
+    }
+}
 
 /// 在 WebView2 缓存目录里找用量 token。
 ///
@@ -121,14 +146,14 @@ pub fn find_webview_cached_usage_token(
         }
         let stamp = (metadata.len(), metadata.modified().ok());
         if scan.seen.len() >= MAX_SEEN_ENTRIES {
-            scan.seen.clear();
+            evict_oldest_quarter(scan);
         }
         if scan.seen.get(&path) == Some(&stamp) {
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
         let Some(text) = read_shared_text(&path) else {
-            scan.seen.insert(path, stamp);
+            mark_seen(scan, path, stamp);
             continue;
         };
         match extract_user_api_token(&text) {
@@ -137,10 +162,10 @@ pub fn find_webview_cached_usage_token(
                     return Some(token);
                 }
                 // 调用方拒收（校验失败）：记入 seen，避免同一坏 token 每次轮询重复弹出
-                scan.seen.insert(path, stamp);
+                mark_seen(scan, path, stamp);
             }
             None => {
-                scan.seen.insert(path, stamp);
+                mark_seen(scan, path, stamp);
             }
         }
     }

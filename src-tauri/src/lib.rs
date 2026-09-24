@@ -3,6 +3,7 @@ pub mod config;
 pub mod credentials;
 pub mod deepseek_api;
 pub mod http;
+pub mod sync_script;
 pub mod token_sync;
 pub mod usage;
 pub mod window_pos;
@@ -17,6 +18,7 @@ use config::{
 use deepseek_api::{
     fetch_balance_with_key, fetch_usage_with_token, verify_usage_token, BalanceResult, UsageResult,
 };
+use sync_script::USAGE_SYNC_POLL_JS;
 use token_sync::{find_webview_cached_usage_token, CacheScanState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -304,6 +306,7 @@ pub fn run() {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
             thread::sleep(Duration::from_secs(3));
             let mut scan = CacheScanState::default();
+            let mut idle_rounds = 0u32;
             for _ in 0..1200 {
                 // 新一轮同步已开始：本 watcher 作废
                 let current = app
@@ -319,6 +322,7 @@ pub fn run() {
                     let _ = capture_usage_token(&app, token);
                     return;
                 }
+                idle_rounds = idle_rounds.saturating_add(1);
 
                 let Some(window) = app.get_webview_window("login-sync") else {
                     // 窗口已关闭：若不是因成功捕获而关闭，才通知前端结束等待
@@ -341,7 +345,9 @@ pub fn run() {
                     }
                 }
 
-                thread::sleep(Duration::from_millis(1500));
+                // 登录初期 1.5s 快扫；连续空转后放慢到 4s
+                let sleep_ms = if idle_rounds < 20 { 1500 } else { 4000 };
+                thread::sleep(Duration::from_millis(sleep_ms));
             }
             // 30 分钟超时，若仍未成功则通知前端结束等待
             let captured = app
@@ -353,82 +359,6 @@ pub fn run() {
             }
         });
     }
-
-    // 在登录窗口注入，hook fetch / XMLHttpRequest，主动从平台 API 请求的
-    // Authorization 头里抓 Bearer token。登录后页面自动调 API 即可即时捕获，
-    // 不再依赖 WebView2 磁盘缓存的延迟落盘。
-    const USAGE_SYNC_POLL_JS: &str = r#"
-    (function() {
-      // 本脚本作为 initialization_script 在 login-sync 的每次导航都会注入。
-      // 导航已限制在 DeepSeek 域内；这里再收窄：非平台域名不装 hook，
-      // 避免读到无关页面的 Authorization 头。
-      if (location.host !== 'platform.deepseek.com') return;
-      if (window.__dsm_token_hook__) return;
-      window.__dsm_token_hook__ = true;
-      var done = false;
-      var pending = false;
-
-      function deliver(token) {
-        if (done) return;
-        if (!token || typeof token !== 'string') return;
-        token = token.trim();
-        if (token.length < 20) return;
-        var now = new Date();
-        var y = now.getFullYear();
-        var m = now.getMonth() + 1;
-        // 唯一通道：IPC 直传。完整 Bearer 不写入 document.title，
-        // 避免任意进程用 EnumWindows/GetWindowText 读到。
-        // 无 IPC 时原生侧仍会扫 WebView 缓存并校验后落盘。
-        try {
-          if (!pending && window.__TAURI__ && window.__TAURI__.core) {
-            pending = true;
-            window.__TAURI__.core.invoke('usage_token_captured', {
-              token: token, month: m, year: y
-            }).then(function() { done = true; }).catch(function() { pending = false; });
-          }
-        } catch (e) {}
-      }
-
-      function fromAuth(value) {
-        if (!value) return;
-        var m = /Bearer\s+(\S+)/i.exec(String(value));
-        if (m && m[1]) deliver(m[1]);
-      }
-
-      var origFetch = window.fetch;
-      if (typeof origFetch === 'function') {
-        window.fetch = function(input, init) {
-          try {
-            var headers = (init && init.headers) || (input && input.headers);
-            if (headers) {
-              if (typeof Headers !== 'undefined' && headers instanceof Headers) {
-                fromAuth(headers.get('authorization'));
-              } else if (Array.isArray(headers)) {
-                for (var i = 0; i < headers.length; i++) {
-                  if (headers[i] && String(headers[i][0]).toLowerCase() === 'authorization') {
-                    fromAuth(headers[i][1]);
-                  }
-                }
-              } else if (typeof headers === 'object') {
-                for (var k in headers) {
-                  if (k.toLowerCase() === 'authorization') fromAuth(headers[k]);
-                }
-              }
-            }
-          } catch (e) {}
-          return origFetch.apply(this, arguments);
-        };
-      }
-
-      var origSet = XMLHttpRequest.prototype.setRequestHeader;
-      XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-        try {
-          if (name && String(name).toLowerCase() === 'authorization') fromAuth(value);
-        } catch (e) {}
-        return origSet.apply(this, arguments);
-      };
-    })();
-    "#;
 
     #[tauri::command]
     async fn start_usage_sync(

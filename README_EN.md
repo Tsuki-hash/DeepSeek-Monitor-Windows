@@ -199,6 +199,9 @@ The UI is one file (`main.tsx` plus `styles.css`); the backend is split into a f
 
 ## FAQ
 
+**Usage keeps failing but balance is fine.**
+Different APIs and credentials. Re-sync the usage token, paste a token manually, or retry later. If balance works, the API key is fine.
+
 **The balance loads but usage is always empty.**
 They use different credentials. Balance comes from the API key; usage comes from the usage token. Make sure the token is configured.
 

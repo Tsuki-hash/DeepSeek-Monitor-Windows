@@ -111,6 +111,18 @@ export const previousMonth = (date: Date) => {
   return { month: previous.getMonth() + 1, year: previous.getFullYear() };
 };
 
+/** 刷新失败后的展示态：silent 且已有数据时保留「ok」，便于界面保留快照。 */
+export const nextLoadStateAfterError = (
+  prev: "loading" | "ok" | "error" | "nokey",
+  silent: boolean,
+  message: string,
+): "loading" | "ok" | "error" | "nokey" => {
+  if (silent && prev === "ok") {
+    return "ok";
+  }
+  return message.includes("未配置") ? "nokey" : "error";
+};
+
 export type ChartScope = "all" | "flash" | "pro";
 
 export type ChartPoint = {

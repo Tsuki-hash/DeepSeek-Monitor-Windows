@@ -9,6 +9,7 @@ import type {
   UsageResult,
   ViewName,
 } from "./types";
+import { nextLoadStateAfterError } from "./format";
 import { fetchCurrentUsage } from "./usage-api";
 import { DashboardPanel } from "./components/DashboardPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -68,12 +69,7 @@ function App() {
         if (!silent) {
           setUsage(null);
         }
-        setUsageState((prev) => {
-          if (silent && prev === "ok") {
-            return "ok";
-          }
-          return message.includes("未配置") ? "nokey" : "error";
-        });
+        setUsageState((prev) => nextLoadStateAfterError(prev, silent, message));
       });
   }, []);
 

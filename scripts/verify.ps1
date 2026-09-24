@@ -15,6 +15,9 @@ npm test
 Write-Host '==> 前端 lint' -ForegroundColor Cyan
 npm run lint
 
+Write-Host '==> 前端 format 检查' -ForegroundColor Cyan
+npx prettier --check "src/**/*.{ts,tsx,css}"
+
 Write-Host '==> 前端构建' -ForegroundColor Cyan
 npm run build
 

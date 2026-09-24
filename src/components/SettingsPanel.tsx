@@ -18,6 +18,32 @@ import { useTheme } from "../theme";
 import { BrandIcon } from "./BrandIcon";
 import { SettingsSection, Toggle } from "./ui";
 
+function useSettingsActions(handlers: {
+  onUsageLoaded: (usage: UsageResult) => void;
+  setUsageStatus: (status: string) => void;
+  setShowManualPaste: (show: boolean) => void;
+}) {
+  const { onUsageLoaded, setUsageStatus, setShowManualPaste } = handlers;
+  return React.useCallback(
+    (prefix: string) => {
+      setUsageStatus(`${prefix}，正在刷新用量数据…`);
+      return fetchCurrentUsage()
+        .then((usage) => {
+          onUsageLoaded(usage);
+          setUsageStatus(`${prefix}，本月消费 ${fmtMoney(usage.monthCost)}`);
+          return usage;
+        })
+        .catch((error) => {
+          const message = typeof error === "string" ? error : "用量刷新失败";
+          setUsageStatus(`${prefix}，但用量刷新失败：${message}`);
+          setShowManualPaste(true);
+          return null;
+        });
+    },
+    [onUsageLoaded, setUsageStatus, setShowManualPaste],
+  );
+}
+
 function SettingsPanel({
   onBack,
   onUsageLoaded,
@@ -75,27 +101,12 @@ function SettingsPanel({
       .catch(() => setAppVersion(""));
   }, []);
 
-  // 保存 Token 之后刷新用量。这里刻意不向外抛出：调用它的两条路径（事件回调、保存按钮）
-  // 一旦抛出，要么在回调里变成 unhandled rejection，要么被外层笼统的「保存或验证失败」
-  // 覆盖掉下面这句更准确的提示——而 Token 其实已经成功落盘，用户会被误导去重新粘贴。
-  const refreshUsageAfterToken = React.useCallback(
-    (prefix: string) => {
-      setUsageStatus(`${prefix}，正在刷新用量数据…`);
-      return fetchCurrentUsage()
-        .then((usage) => {
-          onUsageLoaded(usage);
-          setUsageStatus(`${prefix}，本月消费 ${fmtMoney(usage.monthCost)}`);
-          return usage;
-        })
-        .catch((error) => {
-          const message = typeof error === "string" ? error : "用量刷新失败";
-          setUsageStatus(`${prefix}，但用量刷新失败：${message}`);
-          setShowManualPaste(true);
-          return null;
-        });
-    },
-    [onUsageLoaded],
-  );
+  // 保存 Token 之后刷新用量。这里刻意不向外抛出（见 useSettingsActions）。
+  const refreshUsageAfterToken = useSettingsActions({
+    onUsageLoaded,
+    setUsageStatus,
+    setShowManualPaste,
+  });
 
   React.useEffect(() => {
     const unlistenPromise = listen<AppConfig>("usage-token-captured", (event) => {
