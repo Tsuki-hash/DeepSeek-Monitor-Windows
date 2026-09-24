@@ -226,9 +226,16 @@ See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) 
 
 ### v1.2.3
 
+- V4 Pro shown as its own model again (no phase-out badge).
 - Clearer usage-fetch errors with guidance to re-sync or paste the token; balance errors stay separate.
 - Expands manual paste automatically when sync fails to capture a token.
 - Tap/click chart bars for daily details; theme toggle in Settings.
+- Safer autostart path handling and rollback if settings fail to save.
+- Panel snaps near the tray on any taskbar edge.
+- Login sync no longer passes the token via the window title.
+- Conservative token accounting (no double-count of prompt totals).
+
+Installer: `DeepSeekMonitorWindows_1.2.3_x64-setup.exe`.
 
 ### v1.2.2
 
