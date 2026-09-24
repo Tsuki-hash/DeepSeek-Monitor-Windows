@@ -47,7 +47,11 @@ pub fn extract_user_api_token(text: &str) -> Option<String> {
     let marker = "\"token\":\"";
     while let Some(relative_index) = text[search_from..].find(marker) {
         let token_start = search_from + relative_index + marker.len();
-        let token_end = token_start + text[token_start..].find('"')?;
+        // 未闭合的候选（缓存截断）要跳过继续找，不能整函数放弃——后面可能还有完整 token
+        let Some(close_quote) = text[token_start..].find('"') else {
+            break;
+        };
+        let token_end = token_start + close_quote;
         let token = &text[token_start..token_end];
         let context_end = (token_end + 1800).min(text.len());
         let context = &text[token_end..context_end];
@@ -73,7 +77,13 @@ pub struct CacheScanState {
 }
 
 /// 在 WebView2 缓存目录里找用量 token。
-pub fn find_webview_cached_usage_token(scan: &mut CacheScanState) -> Option<String> {
+///
+/// `accept` 用于在外层做网络校验：返回 `false` 表示该 token 不可用，继续扫下一个文件；
+/// 命中且接受的文件不写入 `seen`，便于调用方重试。未解析出 token 的文件才记入 `seen` 以跳过整读。
+pub fn find_webview_cached_usage_token(
+    scan: &mut CacheScanState,
+    accept: &mut dyn FnMut(&str) -> bool,
+) -> Option<String> {
     let local_app_data = std::env::var_os("LOCALAPPDATA")?;
     let cache_dir = PathBuf::from(local_app_data)
         .join("com.deepseek.monitor.windows")
@@ -97,10 +107,20 @@ pub fn find_webview_cached_usage_token(scan: &mut CacheScanState) -> Option<Stri
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
-        scan.seen.insert(path.clone(), stamp);
-        if let Some(text) = read_shared_text(&path) {
-            if let Some(token) = extract_user_api_token(&text) {
-                return Some(token);
+        let Some(text) = read_shared_text(&path) else {
+            scan.seen.insert(path, stamp);
+            continue;
+        };
+        match extract_user_api_token(&text) {
+            Some(token) => {
+                if accept(&token) {
+                    return Some(token);
+                }
+                // 调用方拒收（校验失败）：记入 seen，避免同一坏 token 每次轮询重复弹出
+                scan.seen.insert(path, stamp);
+            }
+            None => {
+                scan.seen.insert(path, stamp);
             }
         }
     }
@@ -185,6 +205,14 @@ mod tests {
     }
 
     #[test]
+    fn 前面有未闭合候选_仍能提取后面完整_token() {
+        // 回归：find('\"') 失败曾用 ? 直接返回，导致后面合法 token 扫不到
+        let real = "real-token-value-that-is-long-enough-123456";
+        let text = format!("{{\"token\":\"unclosed-no-end{}", cache_text_with(real));
+        assert_eq!(extract_user_api_token(&text).as_deref(), Some(real));
+    }
+
+    #[test]
     fn 多字节内容_不_panic() {
         // 缓存里混有中文时按字节查找仍须落在字符边界上
         let token = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
@@ -201,7 +229,7 @@ mod tests {
             "LOCALAPPDATA",
             std::env::temp_dir().join("dsm-test-no-such-localappdata"),
         );
-        let found = find_webview_cached_usage_token(&mut scan);
+        let found = find_webview_cached_usage_token(&mut scan, &mut |_| true);
         match previous {
             Some(value) => std::env::set_var("LOCALAPPDATA", value),
             None => std::env::remove_var("LOCALAPPDATA"),

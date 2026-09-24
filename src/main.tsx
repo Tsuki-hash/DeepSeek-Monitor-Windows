@@ -23,6 +23,7 @@ import {
 import "./styles.css";
 import {
   addDays,
+  chartPointFromDay,
   currencySymbol,
   dateKey,
   fmtInt,
@@ -152,8 +153,16 @@ function App() {
       .catch((error) => {
         const message = typeof error === "string" ? error : "查询失败";
         setUsageError(message);
-        setUsage(null);
-        setUsageState(message.includes("未配置") ? "nokey" : "error");
+        // 静默刷新失败时保留上一份可用快照，避免网络抖动把面板打回「查询失败」
+        if (!silent) {
+          setUsage(null);
+        }
+        setUsageState((prev) => {
+          if (silent && prev === "ok") {
+            return "ok";
+          }
+          return message.includes("未配置") ? "nokey" : "error";
+        });
       });
   }, []);
 
@@ -441,14 +450,15 @@ function BalanceCard({
             <SunMedium size={15} />
             <span>当日消耗</span>
           </div>
-          <strong>{todayCost != null ? fmtMoney(todayCost, symbol) : "—"}</strong>
+          {/* 用量费用恒为人民币计价，不能跟余额币种（可能是 USD）走 */}
+          <strong>{todayCost != null ? fmtMoney(todayCost, "¥") : "—"}</strong>
         </div>
         <div className="mini-card">
           <div className="caption-with-icon orange">
             <CalendarDays size={15} />
             <span>本月消费</span>
           </div>
-          <strong>{monthCost != null ? fmtMoney(monthCost, symbol) : "—"}</strong>
+          <strong>{monthCost != null ? fmtMoney(monthCost, "¥") : "—"}</strong>
         </div>
       </div>
     </article>
@@ -583,7 +593,7 @@ function StackedBarChart({
                   </span>
                   {point.other > 0 && (
                     <span className="bar-tooltip-row">
-                      <i className="dot other" />其他（未归类）
+                      <i className="dot other" />其他（含未识别模型）
                       <strong>{fmtInt(point.other)} tokens</strong>
                     </span>
                   )}
@@ -663,15 +673,8 @@ function UsageChart({
   error: string;
 }) {
   const days = recentUsageDays(usage?.days ?? []);
-  const points = days.map((day) => {
-    // Flash 与 Pro 合并，不分模型
-    const hit = day.flashCacheHit + day.proCacheHit;
-    const miss = day.flashCacheMiss + day.proCacheMiss;
-    const response = day.flashResponse + day.proResponse;
-    // 平台未归类的 token（如多模态图片输入），仅在确有数据时展示
-    const other = day.flashOtherTokens + day.proOtherTokens;
-    return { date: day.date, hit, miss, response, other, total: hit + miss + response + other };
-  });
+  // all：合计含未识别模型（差额并入 other），避免按日图静默丢量
+  const points = days.map((day) => chartPointFromDay(day, "all"));
   const hasOther = points.some((point) => point.other > 0);
   const sumHit = points.reduce((sum, point) => sum + point.hit, 0);
   const sumMiss = points.reduce((sum, point) => sum + point.miss, 0);
@@ -1141,13 +1144,7 @@ function ModelDetailPanel({
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
 
   const days = recentUsageDays(usage?.days ?? []);
-  const points = days.map((day) => {
-    const hit = isFlash ? day.flashCacheHit : day.proCacheHit;
-    const miss = isFlash ? day.flashCacheMiss : day.proCacheMiss;
-    const response = isFlash ? day.flashResponse : day.proResponse;
-    const other = isFlash ? day.flashOtherTokens : day.proOtherTokens;
-    return { date: day.date, hit, miss, response, other, total: hit + miss + response + other };
-  });
+  const points = days.map((day) => chartPointFromDay(day, isFlash ? "flash" : "pro"));
   const hasOther = points.some((point) => point.other > 0);
   const rangeText =
     points.length > 0 ? `${mmdd(points[0].date)} - ${mmdd(points[points.length - 1].date)}` : "";

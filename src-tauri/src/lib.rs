@@ -140,18 +140,29 @@ pub fn run() {
         Ok(())
     }
 
+    /// 敏感命令仅允许主面板窗口调用（P0-02）。
+    fn require_main(window: &WebviewWindow) -> Result<(), String> {
+        if window.label() != "main" {
+            return Err("非法调用方".to_string());
+        }
+        Ok(())
+    }
+
     #[tauri::command]
     fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
+        require_main(&window)?;
         hide_main_window_inner(&window)
     }
 
     #[tauri::command]
-    fn get_app_config() -> Result<AppConfig, String> {
+    fn get_app_config(window: WebviewWindow) -> Result<AppConfig, String> {
+        require_main(&window)?;
         to_app_config(read_stored_config()?)
     }
 
     #[tauri::command]
-    fn save_api_key(api_key: String) -> Result<AppConfig, String> {
+    fn save_api_key(window: WebviewWindow, api_key: String) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let value = api_key.trim().to_string();
         if value.is_empty() {
             return Err("API Key 不能为空".to_string());
@@ -164,7 +175,8 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn clear_api_key() -> Result<AppConfig, String> {
+    fn clear_api_key(window: WebviewWindow) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let mut config = read_stored_config()?;
         config.api_key = None;
         write_stored_config(&config)?;
@@ -172,7 +184,11 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn save_refresh_interval(refresh_interval_seconds: u64) -> Result<AppConfig, String> {
+    fn save_refresh_interval(
+        window: WebviewWindow,
+        refresh_interval_seconds: u64,
+    ) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let mut config = read_stored_config()?;
         config.refresh_interval_seconds =
             normalize_refresh_interval_seconds(refresh_interval_seconds);
@@ -181,7 +197,11 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn save_auto_refresh_enabled(auto_refresh_enabled: bool) -> Result<AppConfig, String> {
+    fn save_auto_refresh_enabled(
+        window: WebviewWindow,
+        auto_refresh_enabled: bool,
+    ) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let mut config = read_stored_config()?;
         config.auto_refresh_enabled = auto_refresh_enabled;
         write_stored_config(&config)?;
@@ -194,7 +214,9 @@ pub fn run() {
 
         if enabled {
             let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-            let exe_arg = exe.to_string_lossy().to_string();
+            // Run 键必须写带引号的路径：安装到含空格目录（如 Program Files）时，
+            // 裸路径会被解析成 C:\Program.exe + 参数，导致自启失败或被劫持。
+            let exe_arg = format!("\"{}\"", exe.to_string_lossy());
             let status = Command::new("reg")
                 .args(["add", run_key, "/v", value_name, "/t", "REG_SZ", "/d"])
                 .arg(exe_arg)
@@ -218,7 +240,8 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn save_autostart(autostart: bool) -> Result<AppConfig, String> {
+    fn save_autostart(window: WebviewWindow, autostart: bool) -> Result<AppConfig, String> {
+        require_main(&window)?;
         apply_autostart(autostart)?;
         let mut config = read_stored_config()?;
         config.autostart = autostart;
@@ -238,7 +261,8 @@ pub fn run() {
 
     // 实时查询 DeepSeek 账户余额。DeepSeek 官方仅提供余额接口，无用量接口。
     #[tauri::command]
-    async fn fetch_balance() -> Result<BalanceResult, String> {
+    async fn fetch_balance(window: WebviewWindow) -> Result<BalanceResult, String> {
+        require_main(&window)?;
         let config = read_stored_config()?;
         let api_key = config
             .api_key
@@ -295,7 +319,8 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn save_usage_token(usage_token: String) -> Result<AppConfig, String> {
+    fn save_usage_token(window: WebviewWindow, usage_token: String) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let value = usage_token.trim().to_string();
         if value.is_empty() {
             return Err("用量 Token 不能为空".to_string());
@@ -307,7 +332,8 @@ pub fn run() {
     }
 
     #[tauri::command]
-    fn clear_usage_token() -> Result<AppConfig, String> {
+    fn clear_usage_token(window: WebviewWindow) -> Result<AppConfig, String> {
+        require_main(&window)?;
         let mut config = read_stored_config()?;
         config.usage_token = None;
         write_stored_config(&config)?;
@@ -362,13 +388,64 @@ pub fn run() {
         }
     }
 
+    /// 本地当前 (year, month)。verify 只要求「能调通用量接口」，用当月即可。
+    fn current_ym() -> (u32, u32) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut y = 1970u32;
+        let mut d = secs / 86_400;
+        loop {
+            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            let year_len = if leap { 366 } else { 365 };
+            if d < year_len {
+                break;
+            }
+            d -= year_len;
+            y += 1;
+        }
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let md = [
+            31u64,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
+        let mut m = 1u32;
+        for len in md {
+            if d < len {
+                break;
+            }
+            d -= len;
+            m += 1;
+        }
+        (y, m)
+    }
+
+    /// 缓存扫描的 accept 回调：verify 通过才接受该 token（P0-06）。
+    fn accept_verified_cached_token(token: &str) -> bool {
+        let (year, month) = current_ym();
+        tauri::async_runtime::block_on(verify_usage_token(token, month, year)).is_ok()
+    }
+
     fn start_usage_title_watcher(app: tauri::AppHandle) {
         thread::spawn(move || {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
             thread::sleep(Duration::from_secs(3));
             let mut scan = CacheScanState::default();
             for _ in 0..1200 {
-                if let Some(token) = find_webview_cached_usage_token(&mut scan) {
+                if let Some(token) =
+                    find_webview_cached_usage_token(&mut scan, &mut accept_verified_cached_token)
+                {
                     let _ = capture_usage_token(&app, token);
                     return;
                 }
@@ -387,6 +464,9 @@ pub fn run() {
 
                 if let Ok(title) = window.title() {
                     if let Some(rest) = title.strip_prefix(USAGE_TOKEN_TITLE_PREFIX) {
+                        // 先抹掉 title 再解析：完整凭据在标题里停留的时间越短越好（P0-01）
+                        let _ = window
+                            .eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
                         // 注入脚本写入的格式：{year}:{month}:{token}
                         let mut parts = rest.splitn(3, ':');
                         if let (Some(y), Some(m), Some(tok)) =
@@ -442,18 +522,19 @@ pub fn run() {
         var now = new Date();
         var y = now.getFullYear();
         var m = now.getMonth() + 1;
-        // 主通道：写入 document.title，原生侧 window.title() 读取。
-        // 外部网站窗口默认不注入 __TAURI__，此通道不依赖它，最可靠。
-        try { document.title = 'DSM_USAGE_TOKEN:' + y + ':' + m + ':' + token; } catch (e) {}
-        // 辅通道：若本窗口恰好可用 __TAURI__，直接上报更快
+        // 主通道：IPC 直传。完整 Bearer 不进 document.title，避免任意进程
+        // 用 EnumWindows/GetWindowText 读到（P0-01）。
         try {
           if (!pending && window.__TAURI__ && window.__TAURI__.core) {
             pending = true;
             window.__TAURI__.core.invoke('usage_token_captured', {
               token: token, month: m, year: y
             }).then(function() { done = true; }).catch(function() { pending = false; });
+            return;
           }
         } catch (e) {}
+        // 兜底：无 IPC 时仍写 title（本机侧信道残余风险），原生侧读到后会立刻抹掉
+        try { document.title = 'DSM_USAGE_TOKEN:' + y + ':' + m + ':' + token; } catch (e) {}
       }
 
       function fromAuth(value) {
@@ -498,7 +579,13 @@ pub fn run() {
     "#;
 
     #[tauri::command]
-    async fn start_usage_sync(app: tauri::AppHandle) -> Result<bool, String> {
+    async fn start_usage_sync(
+        window: WebviewWindow,
+        app: tauri::AppHandle,
+    ) -> Result<bool, String> {
+        if window.label() != "main" {
+            return Err("非法调用方".to_string());
+        }
         // 重置本次同步的成功标志
         if let Some(flag) = app.try_state::<Arc<AtomicBool>>() {
             flag.store(false, Ordering::SeqCst);
@@ -507,8 +594,11 @@ pub fn run() {
         // 先扫一次缓存：登录完成后重复点击本命令，缓存落盘后即可命中。
         // 扫描是同步阻塞 IO（逐文件整读，单个上限 20MB），放进 spawn_blocking 执行，
         // 不占用 async runtime 的工作线程，避免拖住同期的余额/用量请求。
+        // 与标题通道一致：先 verify 再落盘，避免缓存里的残缺/无关 "token" 覆盖可用凭据。
         let cached_token = tauri::async_runtime::spawn_blocking(|| {
-            find_webview_cached_usage_token(&mut CacheScanState::default())
+            find_webview_cached_usage_token(&mut CacheScanState::default(), &mut |token| {
+                accept_verified_cached_token(token)
+            })
         })
         .await
         .ok()
@@ -536,6 +626,12 @@ pub fn run() {
             .center()
             .visible(true)
             .initialization_script(USAGE_SYNC_POLL_JS)
+            // 只允许 DeepSeek 站内导航，降低钓鱼/任意站点套壳风险（P0-02）
+            .on_navigation(|nav_url| {
+                nav_url
+                    .host_str()
+                    .is_some_and(|host| host == "deepseek.com" || host.ends_with(".deepseek.com"))
+            })
             .on_page_load(|window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished)
                     && payload
@@ -555,11 +651,16 @@ pub fn run() {
 
     #[tauri::command]
     async fn usage_token_captured(
+        window: WebviewWindow,
         app: tauri::AppHandle,
         token: String,
         month: u32,
         year: u32,
     ) -> Result<AppConfig, String> {
+        // 仅登录窗口可回传 token（P0-02），防止主窗口以外的上下文滥用
+        if window.label() != "login-sync" {
+            return Err("非法调用方".to_string());
+        }
         let value = token.trim().to_string();
         if value.is_empty() {
             return Err("用量 Token 为空".to_string());
@@ -599,7 +700,12 @@ pub fn run() {
 
     // 通过 DeepSeek 平台内部接口拉取用量与费用（需网页登录 token，非官方 API Key）。
     #[tauri::command]
-    async fn fetch_usage(month: u32, year: u32) -> Result<UsageResult, String> {
+    async fn fetch_usage(
+        window: WebviewWindow,
+        month: u32,
+        year: u32,
+    ) -> Result<UsageResult, String> {
+        require_main(&window)?;
         let config = read_stored_config()?;
         let token = config
             .usage_token

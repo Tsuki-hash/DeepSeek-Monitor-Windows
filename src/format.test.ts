@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 
 import {
   addDays,
+  chartPointFromDay,
   currencySymbol,
   dateKey,
   emptyUsageDay,
@@ -190,4 +191,52 @@ test("recentUsageDays：不修改入参数组", () => {
   const snapshot = JSON.stringify(input);
   recentUsageDays(input);
   assert.equal(JSON.stringify(input), snapshot);
+});
+
+// ---------- chartPointFromDay ----------
+
+test("chartPointFromDay：all 用 totalTokens 吞掉未识别模型差额", () => {
+  const sample: UsageDay = {
+    ...emptyUsageDay("2026-09-11"),
+    flashCacheHit: 100,
+    flashCacheMiss: 200,
+    flashResponse: 50,
+    proCacheHit: 10,
+    // 分段和 = 360，totalTokens = 500 → 差额 140 进 other
+    totalTokens: 500,
+  };
+  const point = chartPointFromDay(sample, "all");
+  assert.equal(point.hit, 110);
+  assert.equal(point.miss, 200);
+  assert.equal(point.response, 50);
+  assert.equal(point.other, 140);
+  assert.equal(point.total, 500);
+  assert.equal(point.hit + point.miss + point.response + point.other, point.total);
+});
+
+test("chartPointFromDay：all 在 totalTokens 缺失时退回分段和", () => {
+  const sample: UsageDay = {
+    ...emptyUsageDay("2026-09-11"),
+    flashCacheHit: 10,
+    flashOtherTokens: 5,
+    totalTokens: 0,
+  };
+  const point = chartPointFromDay(sample, "all");
+  assert.equal(point.total, 15);
+  assert.equal(point.other, 5);
+});
+
+test("chartPointFromDay：单模型不含未识别模型差额", () => {
+  const sample: UsageDay = {
+    ...emptyUsageDay("2026-09-11"),
+    flashCacheHit: 100,
+    flashResponse: 20,
+    proCacheMiss: 999,
+    totalTokens: 5000,
+  };
+  const flash = chartPointFromDay(sample, "flash");
+  assert.equal(flash.total, 120);
+  assert.equal(flash.other, 0);
+  const pro = chartPointFromDay(sample, "pro");
+  assert.equal(pro.total, 999);
 });

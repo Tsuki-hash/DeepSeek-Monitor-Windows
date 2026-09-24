@@ -110,3 +110,38 @@ export const previousMonth = (date: Date) => {
   const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1);
   return { month: previous.getMonth() + 1, year: previous.getFullYear() };
 };
+
+export type ChartScope = "all" | "flash" | "pro";
+
+export type ChartPoint = {
+  date: string;
+  hit: number;
+  miss: number;
+  response: number;
+  other: number;
+  total: number;
+};
+
+/**
+ * 把单日用量映射成柱状图数据点。
+ *
+ * `scope === "all"` 时合计优先取 `day.totalTokens`（后端覆盖含未识别模型），
+ * 与已知分段之和的差额并入 other，避免新模型名出现时按日图静默丢量。
+ * 单模型（flash/pro）没有独立的 total 字段，仍按分段求和。
+ */
+export const chartPointFromDay = (day: UsageDay, scope: ChartScope = "all"): ChartPoint => {
+  const hit = scope === "flash" ? day.flashCacheHit : scope === "pro" ? day.proCacheHit : day.flashCacheHit + day.proCacheHit;
+  const miss =
+    scope === "flash" ? day.flashCacheMiss : scope === "pro" ? day.proCacheMiss : day.flashCacheMiss + day.proCacheMiss;
+  const response =
+    scope === "flash" ? day.flashResponse : scope === "pro" ? day.proResponse : day.flashResponse + day.proResponse;
+  const knownOther =
+    scope === "flash" ? day.flashOtherTokens : scope === "pro" ? day.proOtherTokens : day.flashOtherTokens + day.proOtherTokens;
+  const segmented = hit + miss + response + knownOther;
+  if (scope !== "all") {
+    return { date: day.date, hit, miss, response, other: knownOther, total: segmented };
+  }
+  const total = Math.max(day.totalTokens, segmented);
+  const other = knownOther + (total - segmented);
+  return { date: day.date, hit, miss, response, other, total };
+};
