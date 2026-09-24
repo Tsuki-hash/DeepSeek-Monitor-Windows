@@ -7,8 +7,7 @@ pub mod usage;
 mod test_support;
 
 use config::{
-    normalize_refresh_interval_seconds, read_stored_config, to_app_config, write_stored_config,
-    AppConfig,
+    edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
 use token_sync::{find_webview_cached_usage_token, CacheScanState};
 use usage::{
@@ -21,7 +20,7 @@ pub fn run() {
     use std::{
         process::Command,
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, OnceLock,
         },
         thread,
@@ -168,19 +167,19 @@ pub fn run() {
             return Err("API Key 不能为空".to_string());
         }
 
-        let mut config = read_stored_config()?;
-        config.api_key = Some(value);
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.api_key = Some(value);
+            Ok(())
+        })?)
     }
 
     #[tauri::command]
     fn clear_api_key(window: WebviewWindow) -> Result<AppConfig, String> {
         require_main(&window)?;
-        let mut config = read_stored_config()?;
-        config.api_key = None;
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.api_key = None;
+            Ok(())
+        })?)
     }
 
     #[tauri::command]
@@ -189,11 +188,11 @@ pub fn run() {
         refresh_interval_seconds: u64,
     ) -> Result<AppConfig, String> {
         require_main(&window)?;
-        let mut config = read_stored_config()?;
-        config.refresh_interval_seconds =
-            normalize_refresh_interval_seconds(refresh_interval_seconds);
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.refresh_interval_seconds =
+                normalize_refresh_interval_seconds(refresh_interval_seconds);
+            Ok(())
+        })?)
     }
 
     #[tauri::command]
@@ -202,10 +201,10 @@ pub fn run() {
         auto_refresh_enabled: bool,
     ) -> Result<AppConfig, String> {
         require_main(&window)?;
-        let mut config = read_stored_config()?;
-        config.auto_refresh_enabled = auto_refresh_enabled;
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.auto_refresh_enabled = auto_refresh_enabled;
+            Ok(())
+        })?)
     }
 
     fn apply_autostart(enabled: bool) -> Result<(), String> {
@@ -243,10 +242,10 @@ pub fn run() {
     fn save_autostart(window: WebviewWindow, autostart: bool) -> Result<AppConfig, String> {
         require_main(&window)?;
         apply_autostart(autostart)?;
-        let mut config = read_stored_config()?;
-        config.autostart = autostart;
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.autostart = autostart;
+            Ok(())
+        })?)
     }
 
     #[derive(Debug, Serialize)]
@@ -325,19 +324,19 @@ pub fn run() {
         if value.is_empty() {
             return Err("用量 Token 不能为空".to_string());
         }
-        let mut config = read_stored_config()?;
-        config.usage_token = Some(value);
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.usage_token = Some(value);
+            Ok(())
+        })?)
     }
 
     #[tauri::command]
     fn clear_usage_token(window: WebviewWindow) -> Result<AppConfig, String> {
         require_main(&window)?;
-        let mut config = read_stored_config()?;
-        config.usage_token = None;
-        write_stored_config(&config)?;
-        to_app_config(config)
+        to_app_config(edit_config(|config| {
+            config.usage_token = None;
+            Ok(())
+        })?)
     }
 
     const USAGE_TOKEN_TITLE_PREFIX: &str = "DSM_USAGE_TOKEN:";
@@ -347,10 +346,10 @@ pub fn run() {
         if value.is_empty() {
             return Err("用量 Token 为空".to_string());
         }
-        let mut config = read_stored_config()?;
-        config.usage_token = Some(value);
-        write_stored_config(&config)?;
-        let app_config = to_app_config(config)?;
+        let app_config = to_app_config(edit_config(|config| {
+            config.usage_token = Some(value);
+            Ok(())
+        })?)?;
 
         // 标记本次同步已成功，避免 watcher 在窗口关闭后误发"结束等待"事件
         if let Some(flag) = app.try_state::<Arc<AtomicBool>>() {
@@ -437,12 +436,20 @@ pub fn run() {
         tauri::async_runtime::block_on(verify_usage_token(token, month, year)).is_ok()
     }
 
-    fn start_usage_title_watcher(app: tauri::AppHandle) {
+    fn start_usage_title_watcher(app: tauri::AppHandle, generation: u64) {
         thread::spawn(move || {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
             thread::sleep(Duration::from_secs(3));
             let mut scan = CacheScanState::default();
             for _ in 0..1200 {
+                // 新一轮同步已开始：本 watcher 作废（P1-01）
+                let current = app
+                    .try_state::<Arc<AtomicU64>>()
+                    .map(|g| g.load(Ordering::SeqCst))
+                    .unwrap_or(0);
+                if current != generation {
+                    return;
+                }
                 if let Some(token) =
                     find_webview_cached_usage_token(&mut scan, &mut accept_verified_cached_token)
                 {
@@ -586,10 +593,14 @@ pub fn run() {
         if window.label() != "main" {
             return Err("非法调用方".to_string());
         }
-        // 重置本次同步的成功标志
+        // 重置本次同步的成功标志，并递增 watcher 代际（作废旧 watcher）
         if let Some(flag) = app.try_state::<Arc<AtomicBool>>() {
             flag.store(false, Ordering::SeqCst);
         }
+        let generation = app
+            .try_state::<Arc<AtomicU64>>()
+            .map(|g| g.fetch_add(1, Ordering::SeqCst) + 1)
+            .unwrap_or(1);
 
         // 先扫一次缓存：登录完成后重复点击本命令，缓存落盘后即可命中。
         // 扫描是同步阻塞 IO（逐文件整读，单个上限 20MB），放进 spawn_blocking 执行，
@@ -645,7 +656,7 @@ pub fn run() {
             })
             .build()
             .map_err(|error| format!("打开登录窗口失败：{error}"))?;
-        start_usage_title_watcher(app);
+        start_usage_title_watcher(app, generation);
         Ok(false)
     }
 
@@ -706,6 +717,10 @@ pub fn run() {
         year: u32,
     ) -> Result<UsageResult, String> {
         require_main(&window)?;
+        // P2-13：拒绝非法月份，避免把垃圾参数打进平台接口
+        if !(1..=12).contains(&month) || !(2020..=2100).contains(&year) {
+            return Err("非法的月份或年份".to_string());
+        }
         let config = read_stored_config()?;
         let token = config
             .usage_token
@@ -909,6 +924,9 @@ pub fn run() {
             }
         }))
         .manage(Arc::new(AtomicBool::new(false)))
+        // P1-01：watcher 代际号。每次 start_usage_sync 建窗时 +1，旧 watcher 发现
+        // 代际不匹配则退出，避免关窗后 1.5s 内再点同步拉起双 watcher。
+        .manage(Arc::new(AtomicU64::new(0)))
         .invoke_handler(tauri::generate_handler![
             hide_main_window,
             get_app_config,

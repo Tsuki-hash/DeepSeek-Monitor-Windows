@@ -12,8 +12,38 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, MutexGuard, OnceLock,
+    },
 };
+
+/// 进程内配置读改写锁（P1-02）。多个 command 并发 save 时 last-write-wins 会丢字段，
+/// 用一把全局锁把「读 → 改 → 写」串行化。锁的是本进程；跨进程写同一 config.json
+/// 仍可能出现覆盖（单实例插件已保证只有一个进程，故可接受）。
+fn config_io_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_config_io() -> MutexGuard<'static, ()> {
+    config_io_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// 在配置锁内执行「读 → 改 → 写」，避免并发命令互相覆盖（P1-02）。
+/// 回调拿到 `&mut StoredConfig`，禁止在回调里再调 `read_stored_config` / `write_stored_config`
+/// （它们会重入同一把非可重入 Mutex 导致死锁）。返回修改后的配置，供转 `AppConfig`。
+pub fn edit_config(
+    f: impl FnOnce(&mut StoredConfig) -> Result<(), String>,
+) -> Result<StoredConfig, String> {
+    let _guard = lock_config_io();
+    let mut config = read_stored_config_unlocked()?;
+    f(&mut config)?;
+    write_stored_config_unlocked(&config)?;
+    Ok(config)
+}
 
 /// 配置缺字段时的默认刷新间隔（秒）。必须走 serde 默认值，不能依赖派生的 Default：
 /// 旧版本写入的或用户手工编辑过的 config.json 少一个字段，就会让反序列化整体失败，
@@ -94,6 +124,11 @@ pub fn config_path() -> Result<PathBuf, String> {
 /// 凭据字段在返回前解密（M-1）。迁移：只要读到的是旧格式（无版本号标记的明文），
 /// 就顺手回写一份加密的。回写失败不影响本次读取——用户拿到可用的配置比迁移成功更重要。
 pub fn read_stored_config() -> Result<StoredConfig, String> {
+    let _guard = lock_config_io();
+    read_stored_config_unlocked()
+}
+
+fn read_stored_config_unlocked() -> Result<StoredConfig, String> {
     let path = config_path()?;
     if !path.exists() {
         return Ok(StoredConfig::with_defaults());
@@ -117,7 +152,8 @@ pub fn read_stored_config() -> Result<StoredConfig, String> {
     let needs_migration = decrypt_credentials(&mut config);
     if needs_migration {
         // 明文凭据已还原到内存，此处回写即完成「读取时自动加密」。
-        if let Err(error) = write_stored_config(&config) {
+        // 已持有 config_io_lock，必须走 unlocked 写，避免自锁。
+        if let Err(error) = write_stored_config_unlocked(&config) {
             log::warn!("凭据加密迁移回写失败（本次读取不受影响）：{error}");
         }
     }
@@ -210,6 +246,11 @@ pub fn normalize_refresh_interval_seconds(value: u64) -> u64 {
 /// 落盘前加密凭据字段（M-1），并统一盖上当前 schema 版本号。所有写入都经过本函数，
 /// 调用方无需各自维护，也就不会出现「某个命令写出的文件是明文没加密」这种不一致。
 pub fn write_stored_config(config: &StoredConfig) -> Result<(), String> {
+    let _guard = lock_config_io();
+    write_stored_config_unlocked(config)
+}
+
+fn write_stored_config_unlocked(config: &StoredConfig) -> Result<(), String> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;

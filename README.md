@@ -134,7 +134,7 @@ API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**�
 
 ### 环境要求
 
-- Node.js 18+ 与 npm
+- Node.js 22+ 与 npm（单测使用 `node --test --experimental-strip-types`）
 - Rust 1.77.2+，建议 MSVC 工具链
 - Visual Studio Build Tools 2022，勾选 `Desktop development with C++`
 

@@ -216,9 +216,25 @@ function App() {
     if (!autoRefreshEnabled || !windowVisible) {
       return;
     }
-    // 自动刷新属于后台更新，走静默模式
-    const timer = window.setInterval(() => refreshAll(true), refreshIntervalSeconds * 1000);
-    return () => window.clearInterval(timer);
+    // 自动刷新属于后台更新，走静默模式。
+    // 用 setTimeout 链而非 setInterval：睡眠唤醒后 interval 可能连发补帧，
+    // 链式调度总是等上一次结束后再计时（P2-06）。
+    let cancelled = false;
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        if (cancelled) {
+          return;
+        }
+        refreshAll(true);
+        schedule();
+      }, refreshIntervalSeconds * 1000);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds, windowVisible]);
 
   const hideWindow = React.useCallback(() => {
@@ -264,7 +280,13 @@ function App() {
         />
       )}
       {view === "detail" && (
-        <ModelDetailPanel model={model} usage={usage} usageState={usageState} onBack={() => setView("dashboard")} />
+        <ModelDetailPanel
+          model={model}
+          usage={usage}
+          usageState={usageState}
+          usageError={usageError}
+          onBack={() => setView("dashboard")}
+        />
       )}
     </div>
   );
@@ -479,7 +501,8 @@ function UsageRow({
   onClick: () => void;
 }) {
   const isFlash = modelKey === "flash";
-  const name = isFlash ? "V4.1 Flash" : "V4 Pro";
+  // 显示名优先取后端 model_slot 的 name（P2-03）
+  const name = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
   const tokensText = data
     ? `${fmtInt(data.totalTokens)} Tokens`
     : state === "loading"
@@ -832,7 +855,9 @@ function SettingsPanel({
         setStatus(`验证通过，当前余额 ${symbol}${balance.totalBalance}${tip}`);
       })
       .catch((error) => {
-        setStatus(typeof error === "string" ? error : "保存或验证失败");
+        // 保存已成功、仅后续验证失败时不能笼统说「保存或验证失败」（P2-04）
+        const message = typeof error === "string" ? error : "验证失败";
+        setStatus(`Key 已保存，但验证未通过：${message}`);
       })
       .finally(() => setBusy(false));
   }, [apiKey]);
@@ -976,7 +1001,7 @@ function SettingsPanel({
         </header>
 
         <SettingsSection icon={<KeyRound size={15} />} title="API Key">
-          <p>用于调用 DeepSeek API 获取余额和用量数据。当前 Windows 版本会保存在应用本地设置中。</p>
+          <p>仅用于查询账户余额（用量需网页登录 Token，见下一节）。会保存在应用本地设置中。</p>
           <p className="muted">API Key 只在当前这台 Windows 电脑本地保留。</p>
           <p className="muted config-path">
             <span>本地位置：</span>
@@ -1129,16 +1154,19 @@ function ModelDetailPanel({
   model,
   usage,
   usageState,
+  usageError,
   onBack,
 }: {
   model: ModelName;
   usage: UsageResult | null;
   usageState: LoadState;
+  usageError: string;
   onBack: () => void;
 }) {
   const isFlash = model === "flash";
   const data = usage?.models.find((item) => item.key === model) ?? null;
-  const title = isFlash ? "V4.1 Flash" : "V4 Pro";
+  // 显示名以后端 model_slot 为准，避免前后端双源漂移（P2-03）
+  const title = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
   const tintClass = isFlash ? "flash" : "pro";
   const cost = data ? fmtMoney(data.cost) : "—";
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
@@ -1193,7 +1221,13 @@ function ModelDetailPanel({
           <StackedBarChart points={points} variant="detail" hasOther={hasOther} />
         ) : (
           <div className="chart-placeholder">
-            {usageState === "nokey" ? "未配置用量 Token" : usageState === "loading" ? "查询中…" : "暂无数据"}
+            {usageState === "nokey"
+              ? "未配置用量 Token"
+              : usageState === "loading"
+                ? "查询中…"
+                : usageState === "error"
+                  ? usageError || "用量不可用"
+                  : "暂无数据"}
           </div>
         )}
       </article>

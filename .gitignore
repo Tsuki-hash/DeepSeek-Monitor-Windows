@@ -19,6 +19,7 @@ src-tauri/target/
 PRD.md
 IMPLEMENTATION_NOTES.md
 docs/
+.workbuddy/
 
 # ---------- Local environment and secrets ----------
 .npmrc

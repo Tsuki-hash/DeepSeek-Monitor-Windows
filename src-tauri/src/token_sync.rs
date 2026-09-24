@@ -4,11 +4,12 @@
 //! 缓存文件是二进制混杂文本，标记串一旦变化（平台前端改动）就会静默抓不到 token，
 //! 表现为「点了同步但一直没反应」。这类解析逻辑必须能被测试直接喂样本。
 
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
     fs,
     io::Read,
-    os::windows::fs::OpenOptionsExt,
     path::{Path, PathBuf},
 };
 
@@ -21,6 +22,7 @@ const MAX_CACHE_FILE_BYTES: u64 = 20 * 1024 * 1024;
 /// Windows 上 WebView2 以独占写句柄持有缓存文件，普通 `fs::read` 会拿到
 /// 「另一个程序正在使用此文件」。这里用 `share_mode` 显式允许读写删除共享，
 /// 拿到快照即可；读到的内容不完整也无妨，解析函数会自行判断。
+#[cfg(windows)]
 pub fn read_shared_text(path: &Path) -> Option<String> {
     let mut file = fs::OpenOptions::new()
         .read(true)
@@ -34,6 +36,17 @@ pub fn read_shared_text(path: &Path) -> Option<String> {
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.read_to_end(&mut bytes).ok()?;
     // 缓存文件里夹着 NUL 填充，先剔掉再交给字符串匹配
+    Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
+}
+
+/// 非 Windows：无 WebView2 共享句柄语义，直接整读（P1-04）。
+#[cfg(not(windows))]
+pub fn read_shared_text(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    if metadata.len() == 0 || metadata.len() > MAX_CACHE_FILE_BYTES {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
     Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
 }
 
@@ -76,6 +89,10 @@ pub struct CacheScanState {
     seen: HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
 }
 
+/// `seen` 表项上限。缓存目录文件极多时无限增长会拖慢每次扫描（P2-08）；
+/// 超限后整表清空，代价是短暂重读一遍，远好于无界膨胀。
+const MAX_SEEN_ENTRIES: usize = 50_000;
+
 /// 在 WebView2 缓存目录里找用量 token。
 ///
 /// `accept` 用于在外层做网络校验：返回 `false` 表示该 token 不可用，继续扫下一个文件；
@@ -103,6 +120,9 @@ pub fn find_webview_cached_usage_token(
             continue;
         }
         let stamp = (metadata.len(), metadata.modified().ok());
+        if scan.seen.len() >= MAX_SEEN_ENTRIES {
+            scan.seen.clear();
+        }
         if scan.seen.get(&path) == Some(&stamp) {
             // 上次已经读过且文件未变动，跳过整读
             continue;
