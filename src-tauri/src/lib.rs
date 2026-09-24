@@ -1,6 +1,7 @@
 pub mod autostart;
 pub mod config;
 pub mod credentials;
+pub mod deepseek_api;
 pub mod http;
 pub mod token_sync;
 pub mod usage;
@@ -13,15 +14,13 @@ use autostart::apply_autostart;
 use config::{
     edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
-use http::http_client;
-use token_sync::{find_webview_cached_usage_token, CacheScanState};
-use usage::{
-    cost_sum, merge_model_slot, model_slot, token_breakdown, Entry, UsageModelSummary, FLASH_SLOT,
+use deepseek_api::{
+    fetch_balance_with_key, fetch_usage_with_token, verify_usage_token, BalanceResult, UsageResult,
 };
+use token_sync::{find_webview_cached_usage_token, CacheScanState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use serde::{Deserialize, Serialize};
     use std::{
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
@@ -205,16 +204,6 @@ pub fn run() {
         })?)
     }
 
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct BalanceResult {
-        is_available: bool,
-        currency: String,
-        total_balance: String,
-        granted_balance: String,
-        topped_up_balance: String,
-    }
-
     // 实时查询 DeepSeek 账户余额。DeepSeek 官方仅提供余额接口，无用量接口。
     #[tauri::command]
     async fn fetch_balance(window: WebviewWindow) -> Result<BalanceResult, String> {
@@ -224,54 +213,7 @@ pub fn run() {
             .api_key
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "未配置 API Key".to_string())?;
-
-        let client = http_client();
-        let response = client
-            .get("https://api.deepseek.com/user/balance")
-            .bearer_auth(&api_key)
-            .send()
-            .await
-            .map_err(|error| format!("网络请求失败：{error}"))?;
-
-        match response.status().as_u16() {
-            200 => {}
-            401 => return Err("API Key 无效或已过期".to_string()),
-            429 => return Err("请求过于频繁，请稍后再试".to_string()),
-            code if code >= 500 => return Err(format!("DeepSeek 服务器错误：{code}")),
-            code => return Err(format!("请求失败：HTTP {code}")),
-        }
-
-        #[derive(Deserialize)]
-        struct BalanceInfo {
-            currency: String,
-            total_balance: String,
-            granted_balance: String,
-            topped_up_balance: String,
-        }
-        #[derive(Deserialize)]
-        struct BalanceResponse {
-            is_available: bool,
-            balance_infos: Vec<BalanceInfo>,
-        }
-
-        let data: BalanceResponse = response
-            .json()
-            .await
-            .map_err(|error| format!("解析余额数据失败：{error}"))?;
-
-        let info = data
-            .balance_infos
-            .into_iter()
-            .next()
-            .ok_or_else(|| "余额信息为空".to_string())?;
-
-        Ok(BalanceResult {
-            is_available: data.is_available,
-            currency: info.currency,
-            total_balance: info.total_balance,
-            granted_balance: info.granted_balance,
-            topped_up_balance: info.topped_up_balance,
-        })
+        fetch_balance_with_key(&api_key).await
     }
 
     #[tauri::command]
@@ -325,24 +267,7 @@ pub fn run() {
         Ok(app_config)
     }
 
-    // 用 token 试调平台用量接口，验证它确实是有效的用量 token。
-    async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<(), String> {
-        let url =
-            format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
-        let resp = http_client()
-            .get(&url)
-            .bearer_auth(token)
-            .header("x-app-version", "1.0.0")
-            .header("Accept", "*/*")
-            .send()
-            .await
-            .map_err(|error| format!("验证 token 失败：{error}"))?;
-        if resp.status().as_u16() == 200 {
-            Ok(())
-        } else {
-            Err(format!("token 无效：HTTP {}", resp.status().as_u16()))
-        }
-    }
+    // verify_usage_token 见 deepseek_api 模块。
 
     /// 本地当前 (year, month)。verify 只要求「能调通用量接口」，用当月即可。
     fn current_ym() -> (u32, u32) {
@@ -639,32 +564,7 @@ pub fn run() {
         capture_usage_token(&app, value)
     }
 
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct UsageDaySummary {
-        date: String,
-        flash_tokens: u64,
-        flash_cache_hit: u64,
-        flash_cache_miss: u64,
-        flash_response: u64,
-        pro_tokens: u64,
-        pro_cache_hit: u64,
-        pro_cache_miss: u64,
-        pro_response: u64,
-        // 各模型未归类 token（如多模态图片输入）的当日合计
-        flash_other_tokens: u64,
-        pro_other_tokens: u64,
-        total_tokens: u64,
-        total_cost: f64,
-    }
-
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct UsageResult {
-        models: Vec<UsageModelSummary>,
-        days: Vec<UsageDaySummary>,
-        month_cost: f64,
-    }
+    // UsageDaySummary / UsageResult 已迁至 deepseek_api。
 
     // 通过 DeepSeek 平台内部接口拉取用量与费用（需网页登录 token，非官方 API Key）。
     #[tauri::command]
@@ -683,194 +583,10 @@ pub fn run() {
             .usage_token
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "未配置用量 Token".to_string())?;
-
-        #[derive(Deserialize)]
-        struct ModelUsage {
-            model: String,
-            usage: Vec<Entry>,
-        }
-        #[derive(Deserialize)]
-        struct DayUsage {
-            date: String,
-            data: Vec<ModelUsage>,
-        }
-        #[derive(Deserialize)]
-        struct AmountBiz {
-            total: Vec<ModelUsage>,
-            days: Vec<DayUsage>,
-        }
-        #[derive(Deserialize)]
-        struct AmountData {
-            biz_data: AmountBiz,
-        }
-        #[derive(Deserialize)]
-        struct AmountResp {
-            data: AmountData,
-        }
-        #[derive(Deserialize)]
-        struct CostBiz {
-            total: Vec<ModelUsage>,
-            days: Vec<DayUsage>,
-        }
-        #[derive(Deserialize)]
-        struct CostData {
-            biz_data: Vec<CostBiz>,
-        }
-        #[derive(Deserialize)]
-        struct CostResp {
-            data: CostData,
-        }
-
-        async fn get_json<T: serde::de::DeserializeOwned>(
-            client: &reqwest::Client,
-            url: &str,
-            token: &str,
-        ) -> Result<T, String> {
-            let resp = client
-                .get(url)
-                .bearer_auth(token)
-                .header("x-app-version", "1.0.0")
-                .header("Accept", "*/*")
-                .send()
-                .await
-                .map_err(|error| format!("用量请求失败：{error}"))?;
-            match resp.status().as_u16() {
-                200 => {}
-                401 => return Err("用量 Token 无效或已过期，请重新获取".to_string()),
-                429 => return Err("请求过于频繁，请稍后再试".to_string()),
-                code => return Err(format!("用量接口错误：HTTP {code}")),
-            }
-            resp.json::<T>()
-                .await
-                .map_err(|error| format!("解析用量数据失败：{error}"))
-        }
-
-        let client = http_client();
-        let amount_url =
-            format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
-        let cost_url =
-            format!("https://platform.deepseek.com/api/v0/usage/cost?month={month}&year={year}");
-
-        // 两个端点互相独立、同一 token，串行等待会让总延迟等于两者之和（各自含 15s 超时上限）。
-        // 并发发起后总延迟约等于较慢的那个；配合复用的 Client 还能共享连接握手。
-        // 注意 http_client() 返回的已是 &Client，这里直接传 client，不要再取一次引用。
-        let (amount, cost): (AmountResp, CostResp) = tokio::try_join!(
-            get_json(client, &amount_url, &token),
-            get_json(client, &cost_url, &token),
-        )?;
-
-        let cost_total = cost.data.biz_data.first();
-        let cost_for_model = |model: &str| -> f64 {
-            cost_total
-                .and_then(|item| item.total.iter().find(|m| m.model == model))
-                .map(|m| cost_sum(&m.usage))
-                .unwrap_or(0.0)
-        };
-
-        // 按槽位归并：迁移期内 deepseek-flash 与旧名可能同时出现在同一份账单里，
-        // 它们其实是同一个模型，必须累加，否则前端只取第一个会漏掉另一部分用量。
-        let mut flash_sum: Option<UsageModelSummary> = None;
-        let mut pro_sum: Option<UsageModelSummary> = None;
-        for model_usage in &amount.data.biz_data.total {
-            let Some((slot, display)) = model_slot(&model_usage.model) else {
-                log::warn!("未知模型 {}，未计入模型列表", model_usage.model);
-                continue;
-            };
-            let breakdown = token_breakdown(&model_usage.usage);
-            let cost = cost_for_model(&model_usage.model);
-            if slot == FLASH_SLOT {
-                flash_sum = Some(merge_model_slot(
-                    flash_sum.take(),
-                    slot,
-                    display,
-                    &breakdown,
-                    cost,
-                ));
-            } else {
-                pro_sum = Some(merge_model_slot(
-                    pro_sum.take(),
-                    slot,
-                    display,
-                    &breakdown,
-                    cost,
-                ));
-            }
-        }
-
-        let mut models = Vec::new();
-        models.extend(flash_sum);
-        models.extend(pro_sum);
-
-        let mut cost_by_date: std::collections::HashMap<String, f64> =
-            std::collections::HashMap::new();
-        if let Some(item) = cost_total {
-            for day in &item.days {
-                let day_cost: f64 = day.data.iter().map(|m| cost_sum(&m.usage)).sum();
-                cost_by_date.insert(day.date.clone(), day_cost);
-            }
-        }
-
-        let mut days = Vec::new();
-        for day in &amount.data.biz_data.days {
-            let mut flash = 0u64;
-            let mut flash_hit = 0u64;
-            let mut flash_miss = 0u64;
-            let mut flash_resp = 0u64;
-            let mut pro = 0u64;
-            let mut pro_hit = 0u64;
-            let mut pro_miss = 0u64;
-            let mut pro_resp = 0u64;
-            let mut total = 0u64;
-            let mut flash_other = 0u64;
-            let mut pro_other = 0u64;
-            for model_usage in &day.data {
-                let breakdown = token_breakdown(&model_usage.usage);
-                total += breakdown.total;
-                // total 覆盖当天全部模型（含未知模型），槽位分摊只作用于已识别的模型
-                if let Some((slot, _)) = model_slot(&model_usage.model) {
-                    if slot == FLASH_SLOT {
-                        flash += breakdown.total;
-                        flash_hit += breakdown.cache_hit;
-                        flash_miss += breakdown.cache_miss;
-                        flash_resp += breakdown.response;
-                        flash_other += breakdown.other;
-                    } else {
-                        pro += breakdown.total;
-                        pro_hit += breakdown.cache_hit;
-                        pro_miss += breakdown.cache_miss;
-                        pro_resp += breakdown.response;
-                        pro_other += breakdown.other;
-                    }
-                }
-            }
-            days.push(UsageDaySummary {
-                date: day.date.clone(),
-                flash_tokens: flash,
-                flash_cache_hit: flash_hit,
-                flash_cache_miss: flash_miss,
-                flash_response: flash_resp,
-                pro_tokens: pro,
-                pro_cache_hit: pro_hit,
-                pro_cache_miss: pro_miss,
-                pro_response: pro_resp,
-                flash_other_tokens: flash_other,
-                pro_other_tokens: pro_other,
-                total_tokens: total,
-                total_cost: cost_by_date.get(&day.date).copied().unwrap_or(0.0),
-            });
-        }
-
-        let month_cost: f64 = cost_total
-            .map(|item| item.total.iter().map(|m| cost_sum(&m.usage)).sum())
-            .unwrap_or(0.0);
-
-        Ok(UsageResult {
-            models,
-            days,
-            month_cost,
-        })
+        fetch_usage_with_token(&token, month, year).await
     }
 
+    // 旧聚合实现已迁至 deepseek_api::build_usage_result。
     tauri::Builder::default()
         // 单实例守卫：必须作为第一个注册的插件。
         // 程序已运行时再次启动 exe，第二个进程不会新开窗口，
