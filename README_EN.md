@@ -93,7 +93,7 @@ Names that map to the same row are **summed, not overwritten** — otherwise, wh
 
 Two more things worth knowing:
 
-- **V4 Pro is available.** The platform briefly changed V4 Pro routing but has restored it as its own model; the UI no longer marks it as being phased out.
+- **V4 Pro is available.** Tracked separately from V4.1 Flash, with its own tokens, cost, and cache stats.
 - **Unclassified tokens are counted anyway.** V4.1 Flash takes image input natively. If the platform reports a token type this project has not classified yet, those tokens are still counted in the total and shown as 其他（未归类） in the charts, rather than being silently dropped.
 
 ## What the numbers on screen mean
@@ -233,7 +233,7 @@ See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) 
 
 - Adapted to the DeepSeek model change of 2026-09-10: the new model name is `deepseek-flash` (V4.1 Flash), with labels updated in the interface.
 - Usage is now merged by model row: `deepseek-flash` and the retired names `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` accumulate into a single row, so nothing is lost while old and new names coexist.
-- V4 Pro is marked as being phased out. From 12:00 Beijing time on 2026-09-14 all of its requests route to V4.1 Flash at V4.1 Flash rates.
+- Documented the platform’s V4 Pro routing policy at the time (now available again as its own model; the UI has no phase-out badge).
 - Added a fallback for unclassified token types: they are counted in the total and shown separately in the charts instead of being silently dropped.
 - Installer `DeepSeekMonitorWindows_1.2.1_x64-setup.exe`.
 

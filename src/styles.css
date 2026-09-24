@@ -336,21 +336,6 @@ button {
   color: rgba(var(--fg), 0.82);
 }
 
-/* 历史「逐步下线」标注样式：V4 Pro 已恢复为独立模型，组件中不再使用该标注 */
-.deprecation-tag {
-  display: inline-block;
-  margin-left: 7px;
-  padding: 1px 6px 2px;
-  border: 1px solid rgba(var(--fg), 0.26);
-  border-radius: 999px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
 .token-line {
   display: flex;
   align-items: center;

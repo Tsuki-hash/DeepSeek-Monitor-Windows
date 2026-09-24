@@ -93,7 +93,7 @@ DeepSeek 在 2026-09-10 上线了 V4.1 Flash，模型名从 `deepseek-v4-flash` 
 
 另外两件事值得知道：
 
-- **V4 Pro 正常提供。** 平台曾短暂调整过 V4 Pro 的路由策略，现已恢复为独立模型；界面不再标注「逐步下线」。
+- **V4 Pro 正常提供。** 与 V4.1 Flash 分开统计，可独立查看 Token、费用与缓存明细。
 - **未归类的 Token 有兜底统计。** V4.1 Flash 原生支持图片输入，如果平台返回了本项目尚未分类的 token 类型，这些量会被计入总量，并在图表里以「其他（未归类）」单独显示，而不是静默丢掉。
 
 ## 界面上的数字分别是什么
@@ -238,7 +238,7 @@ DeepSeek-Monitor-Windows/
 
 - 适配 DeepSeek 2026-09-10 的模型变更：新模型名 `deepseek-flash`（V4.1 Flash），界面名称同步更新。
 - 用量统计改为按模型行归并：`deepseek-flash` 与旧名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 的用量累加到同一行，不再因新旧名字并存而漏统计。
-- V4 Pro 标注「逐步下线」。自北京时间 2026-09-14 12:00 起，其请求全部路由至 V4.1 Flash 并按 Flash 单价计费。
+- 适配当时平台对 V4 Pro 的路由策略说明（现已恢复为独立提供，界面无下线提示）。
 - 新增未归类 token 类型的兜底统计，计入总量并在图表中单独展示，避免静默漏算。
 - 安装包为 `DeepSeekMonitorWindows_1.2.1_x64-setup.exe`。
 
