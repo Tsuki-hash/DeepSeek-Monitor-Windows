@@ -38,14 +38,7 @@ function UsageRow({
         {isFlash ? <Zap size={27} fill="currentColor" /> : <Brain size={25} />}
       </div>
       <div className="usage-main">
-        <h2>
-          {name}
-          {!isFlash && (
-            <span className="deprecation-tag" title="V4 Pro 正在逐步下线，2026-09-14 起请求路由至 V4.1 Flash">
-              逐步下线
-            </span>
-          )}
-        </h2>
+        <h2>{name}</h2>
         <div className="token-line">
           <span>{tokensText}</span>
           <div className="progress-track">

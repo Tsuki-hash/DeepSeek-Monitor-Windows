@@ -336,7 +336,7 @@ button {
   color: rgba(var(--fg), 0.82);
 }
 
-/* 「逐步下线」标注：V4 Pro 自 2026-09-14 12:00 起请求全部路由至 V4.1 Flash */
+/* 历史「逐步下线」标注样式：V4 Pro 已恢复为独立模型，组件中不再使用该标注 */
 .deprecation-tag {
   display: inline-block;
   margin-left: 7px;

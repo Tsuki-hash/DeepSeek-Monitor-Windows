@@ -93,7 +93,7 @@ Names that map to the same row are **summed, not overwritten** — otherwise, wh
 
 Two more things worth knowing:
 
-- **V4 Pro is being retired.** From 12:00 Beijing time on 2026-09-14, every `deepseek-v4-pro` request is routed to V4.1 Flash and billed at V4.1 Flash rates, until V4.1 Pro ships. The Pro row is kept and marked as being phased out, and its historical data stays visible.
+- **V4 Pro is available.** The platform briefly changed V4 Pro routing but has restored it as its own model; the UI no longer marks it as being phased out.
 - **Unclassified tokens are counted anyway.** V4.1 Flash takes image input natively. If the platform reports a token type this project has not classified yet, those tokens are still counted in the total and shown as 其他（未归类） in the charts, rather than being silently dropped.
 
 ## What the numbers on screen mean
@@ -212,7 +212,7 @@ Signing in takes time, and the page only issues requests once login completes �
 That is by design: closing hides the panel to the tray. To actually quit, right-click the tray icon and choose quit.
 
 **Why is the Pro row always ¥0.00?**
-V4 Pro has been routed entirely to V4.1 Flash since 2026-09-14 and no longer produces separate usage. The row stays so you can look back at historical data.
+That means almost no `deepseek-v4-pro` calls this month. V4 Pro and V4.1 Flash are tracked separately; if you called Flash, look at the row above.
 
 **Does it hammer the DeepSeek endpoints?**
 Balance and usage are each requested once in three situations: when you open the panel (including bringing it back from the tray), when you refresh manually, and on whatever auto-refresh interval you set (off by default, minimum 1 minute). Auto-refresh pauses while the panel is hidden in the tray, so nothing polls in the background.

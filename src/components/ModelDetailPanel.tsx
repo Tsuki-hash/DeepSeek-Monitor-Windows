@@ -48,14 +48,7 @@ function ModelDetailPanel({
           {isFlash ? <Zap size={34} fill="currentColor" /> : <Brain size={33} />}
         </div>
         <div>
-          <h1>
-            {title}
-            {!isFlash && (
-              <span className="deprecation-tag" title="V4 Pro 正在逐步下线，2026-09-14 起请求路由至 V4.1 Flash 并按 Flash 计价">
-                逐步下线
-              </span>
-            )}
-          </h1>
+          <h1>{title}</h1>
           <p>{cost}</p>
         </div>
       </article>

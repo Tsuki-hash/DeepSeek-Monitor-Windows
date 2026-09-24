@@ -22,8 +22,7 @@ pub struct Entry {
 /// 模型名映射。2026-09-10 DeepSeek 上线 V4.1 Flash，模型名改为 `deepseek-flash`。
 /// 旧名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 对应的模型已下线，但出于
 /// 兼容仍被路由到 V4.1 Flash，因此迁移期内平台可能同时返回新旧名字，必须归并到同一槽位。
-/// `deepseek-v4-pro` 自 2026-09-14 12:00（北京时间）起同样路由到 V4.1 Flash 并按 Flash
-/// 计价，直到 V4.1 Pro 上线，故暂不删除 pro 槽位，仅作为历史数据承接。
+/// `deepseek-v4-pro`（V4 Pro）继续作为独立模型提供，单独占 pro 槽位。
 ///
 /// 返回 `(槽位 key, 界面显示名)`；未知模型返回 `None`（调用方打 warn 并跳过）。
 pub fn model_slot(model: &str) -> Option<(&'static str, &'static str)> {
