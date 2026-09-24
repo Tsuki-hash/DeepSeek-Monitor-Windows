@@ -253,6 +253,7 @@ pub fn run() {
         })?)
     }
 
+    /// 仅用于识别并清除历史 title 通道残留，不再解析其中的 token。
     const USAGE_TOKEN_TITLE_PREFIX: &str = "DSM_USAGE_TOKEN:";
 
     fn capture_usage_token(app: &tauri::AppHandle, token: String) -> Result<AppConfig, String> {
@@ -271,8 +272,7 @@ pub fn run() {
         }
 
         if let Some(window) = app.get_webview_window("login-sync") {
-            // title 是本机全局可读的侧信道（任意进程可用 EnumWindows + GetWindowText 读到），
-            // 凭据不该在里面停留。主通道写入的 token 必须先抹掉，再关窗口。
+            // 防御：确保标题不含历史 title 通道残留后再关窗
             let _ = window.eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
             let _ = window.close();
         }
@@ -332,28 +332,12 @@ pub fn run() {
                     return;
                 };
 
+                // 旧版 title 通道已移除：完整 Bearer 不再写入窗口标题。
+                // 兼容：若外部工具仍写过 title，读到后立刻抹掉，避免凭据留在标题栏。
                 if let Ok(title) = window.title() {
-                    if let Some(rest) = title.strip_prefix(USAGE_TOKEN_TITLE_PREFIX) {
-                        // 先抹掉 title 再解析：完整凭据在标题里停留的时间越短越好
+                    if title.starts_with(USAGE_TOKEN_TITLE_PREFIX) {
                         let _ = window
                             .eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
-                        // 注入脚本写入的格式：{year}:{month}:{token}
-                        let mut parts = rest.splitn(3, ':');
-                        if let (Some(y), Some(m), Some(tok)) =
-                            (parts.next(), parts.next(), parts.next())
-                        {
-                            if let (Ok(year), Ok(month)) = (y.parse::<u32>(), m.parse::<u32>()) {
-                                let token = tok.to_string();
-                                // 验证 token 真能调用用量接口，过滤登录中途的临时 token
-                                let verified = tauri::async_runtime::block_on(verify_usage_token(
-                                    &token, month, year,
-                                ));
-                                if verified.is_ok() {
-                                    let _ = capture_usage_token(&app, token);
-                                    return;
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -392,19 +376,17 @@ pub fn run() {
         var now = new Date();
         var y = now.getFullYear();
         var m = now.getMonth() + 1;
-        // 主通道：IPC 直传。完整 Bearer 尽量不进 document.title，
+        // 唯一通道：IPC 直传。完整 Bearer 不写入 document.title，
         // 避免任意进程用 EnumWindows/GetWindowText 读到。
+        // 无 IPC 时原生侧仍会扫 WebView 缓存并校验后落盘。
         try {
           if (!pending && window.__TAURI__ && window.__TAURI__.core) {
             pending = true;
             window.__TAURI__.core.invoke('usage_token_captured', {
               token: token, month: m, year: y
             }).then(function() { done = true; }).catch(function() { pending = false; });
-            return;
           }
         } catch (e) {}
-        // 兜底：无 IPC 时仍写 title（本机侧信道残余风险），原生侧读到后会立刻抹掉
-        try { document.title = 'DSM_USAGE_TOKEN:' + y + ':' + m + ':' + token; } catch (e) {}
       }
 
       function fromAuth(value) {
