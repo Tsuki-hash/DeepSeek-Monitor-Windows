@@ -180,9 +180,12 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
 DeepSeek-Monitor-Windows/
 ├── scripts/                     # check-version.mjs、verify.ps1（本地门禁）
 ├── src/                         # 前端
-│   ├── main.tsx                 # 全部界面：主面板、设置页、详情页
+│   ├── main.tsx                 # 入口
+│   ├── App.tsx                  # 路由与全局刷新状态
+│   ├── components/              # 主面板、设置、详情、图表等组件
 │   ├── format.ts                # 纯格式化 / 日期工具（有单测）
 │   ├── format.test.ts           # 上述模块的单测
+│   ├── theme.ts / types.ts / usage-api.ts
 │   └── styles.css               # 全部样式，含深色 / 浅色两套皮肤
 ├── src-tauri/                   # 后端
 │   ├── src/lib.rs               # 命令装配、托盘、窗口显隐、HTTP 请求
