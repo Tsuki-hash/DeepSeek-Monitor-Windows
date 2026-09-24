@@ -1,5 +1,7 @@
+pub mod autostart;
 pub mod config;
 pub mod credentials;
+pub mod http;
 pub mod token_sync;
 pub mod usage;
 pub mod window_pos;
@@ -7,9 +9,11 @@ pub mod window_pos;
 #[cfg(test)]
 mod test_support;
 
+use autostart::apply_autostart;
 use config::{
     edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
+use http::http_client;
 use token_sync::{find_webview_cached_usage_token, CacheScanState};
 use usage::{
     cost_sum, merge_model_slot, model_slot, token_breakdown, Entry, UsageModelSummary, FLASH_SLOT,
@@ -19,7 +23,6 @@ use usage::{
 pub fn run() {
     use serde::{Deserialize, Serialize};
     use std::{
-        process::Command,
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
             Arc, Mutex, OnceLock,
@@ -34,24 +37,7 @@ pub fn run() {
         Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
     };
 
-    // 全局复用的 HTTP 客户端。reqwest::Client 内含连接池与 TLS 会话，官方建议复用；
-    // 每次请求都新建会让每轮自动刷新重做 TCP + TLS 握手。UA 与超时集中在此定义，
-    // 避免三处调用点各写一份、将来改动漏改其一。
-    const HTTP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
-                                   AppleWebKit/537.36 (KHTML, like Gecko) \
-                                   Chrome/148.0.0.0 Safari/537.36";
-    const HTTP_TIMEOUT_SECONDS: u64 = 15;
-
-    fn http_client() -> &'static reqwest::Client {
-        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-        CLIENT.get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent(HTTP_USER_AGENT)
-                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
-                .build()
-                .expect("构建 HTTP 客户端失败")
-        })
-    }
+    // HTTP 客户端见 http 模块；开机自启见 autostart 模块。
 
     // 最近一次托盘图标所在矩形（物理坐标）。TrayIconEvent::Click 会带上图标在屏幕上的
     // 真实位置，它比「光标所在显示器的右下角」更可靠：多显示器时光标可能停在另一块屏上，
@@ -207,37 +193,6 @@ pub fn run() {
             config.auto_refresh_enabled = auto_refresh_enabled;
             Ok(())
         })?)
-    }
-
-    fn apply_autostart(enabled: bool) -> Result<(), String> {
-        let run_key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let value_name = "DeepSeekMonitorWindows";
-
-        if enabled {
-            let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-            // Run 键必须写带引号的路径：安装到含空格目录（如 Program Files）时，
-            // 裸路径会被解析成 C:\Program.exe + 参数，导致自启失败或被劫持。
-            let exe_arg = format!("\"{}\"", exe.to_string_lossy());
-            let status = Command::new("reg")
-                .args(["add", run_key, "/v", value_name, "/t", "REG_SZ", "/d"])
-                .arg(exe_arg)
-                .args(["/f"])
-                .status()
-                .map_err(|error| format!("写入开机自启失败：{error}"))?;
-            if !status.success() {
-                return Err("写入开机自启失败".to_string());
-            }
-            return Ok(());
-        }
-
-        let status = Command::new("reg")
-            .args(["delete", run_key, "/v", value_name, "/f"])
-            .status()
-            .map_err(|error| format!("关闭开机自启失败：{error}"))?;
-        if !status.success() {
-            return Ok(());
-        }
-        Ok(())
     }
 
     #[tauri::command]
