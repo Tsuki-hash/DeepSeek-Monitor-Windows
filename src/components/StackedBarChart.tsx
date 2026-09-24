@@ -24,6 +24,10 @@ function StackedBarChart({
   hasOther: boolean;
 }) {
   const [hoveredIdx, setHoveredIdx] = React.useState<number | null>(null);
+  // 触摸/点按展开明细，再点收起
+  const togglePin = (idx: number) => {
+    setHoveredIdx((prev) => (prev === idx ? null : idx));
+  };
   const MIN_BAR = 3; // 整根柱子的最小可见高度百分比（含空数据占位）
   const maxVal = Math.max(...points.map((point) => point.total), 1);
   const isSummary = variant === "summary";
@@ -92,6 +96,11 @@ function StackedBarChart({
                   onMouseLeave={() => setHoveredIdx(null)}
                   onFocus={() => setHoveredIdx(idx)}
                   onBlur={() => setHoveredIdx(null)}
+                  onTouchStart={(event) => {
+                    event.preventDefault();
+                    togglePin(idx);
+                  }}
+                  onClick={() => togglePin(idx)}
                 >
                   {point.total > 0 ? (
                     <>

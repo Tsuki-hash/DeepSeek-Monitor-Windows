@@ -25,9 +25,9 @@ function UsageChart({
     state === "loading"
       ? "查询中…"
       : state === "nokey"
-        ? "未配置用量 Token"
+        ? "未配置用量 Token，可在设置页同步或粘贴"
         : state === "error"
-          ? error
+          ? error || "用量查询失败，余额不受影响"
           : "暂无数据";
 
   return (

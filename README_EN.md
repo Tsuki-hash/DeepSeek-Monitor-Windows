@@ -221,6 +221,12 @@ Balance and usage are each requested once in three situations: when you open the
 
 See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) for the complete history. `v1.0.0` through `v1.1.0` were published by [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows); this repository took over from `v1.2.1`.
 
+### v1.2.3
+
+- Clearer usage-fetch errors with guidance to re-sync or paste the token; balance errors stay separate.
+- Expands manual paste automatically when sync fails to capture a token.
+- Tap/click chart bars for daily details; theme toggle in Settings.
+
 ### v1.2.2
 
 - **Credentials are now encrypted at rest**: the API key and usage token are written to `config.json` encrypted with Windows DPAPI. The key is tied to the current user and machine, so a copied config file cannot be decrypted; plaintext credentials left by older versions are re-encrypted automatically on first read.

@@ -226,6 +226,12 @@ DeepSeek-Monitor-Windows/
 
 完整发布记录见 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases)。`v1.0.0` – `v1.1.0` 由 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) 发布，本仓库自 `v1.2.1` 起接手维护。
 
+### v1.2.3
+
+- 用量查询失败时提示更明确，并引导重新同步 Token 或手动粘贴；余额与用量错误文案分开说明。
+- 同步未获取到 Token 时自动展开手动粘贴入口。
+- 图表支持点按/触摸查看当日明细；设置页可切换深浅色皮肤。
+
 ### v1.2.2
 
 - **凭据改为加密存储**：API Key 与用量 Token 经 Windows DPAPI 加密后写入 `config.json`。密钥绑定当前用户与机器，配置文件被单独拷走无法解密；旧版本留下的明文凭据在首次读取时自动加密回写。

@@ -96,7 +96,10 @@ pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<()
     if resp.status().as_u16() == 200 {
         Ok(())
     } else {
-        Err(format!("token 无效：HTTP {}", resp.status().as_u16()))
+        Err(format!(
+            "token 校验未通过（HTTP {}），请重新同步或手动粘贴用量 Token",
+            resp.status().as_u16()
+        ))
     }
 }
 
@@ -298,9 +301,16 @@ async fn get_json<T: serde::de::DeserializeOwned>(
         .map_err(|error| format!("用量请求失败：{error}"))?;
     match resp.status().as_u16() {
         200 => {}
-        401 => return Err("用量 Token 无效或已过期，请重新获取".to_string()),
+        401 => return Err("用量 Token 无效或已过期，请重新同步用量 Token（设置页）".to_string()),
+        403 => return Err("用量接口拒绝访问，请重新同步用量 Token（设置页）".to_string()),
+        404 => return Err("用量接口路径可能已变更，可稍后重试或使用手动粘贴 Token".to_string()),
         429 => return Err("请求过于频繁，请稍后再试".to_string()),
-        code => return Err(format!("用量接口错误：HTTP {code}")),
+        code if code >= 500 => {
+            return Err(format!(
+                "用量服务暂时不可用（HTTP {code}），余额查询不受影响"
+            ))
+        }
+        code => return Err(format!("用量接口错误：HTTP {code}，余额查询不受影响")),
     }
     resp.json::<T>()
         .await

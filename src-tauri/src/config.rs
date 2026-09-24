@@ -33,8 +33,8 @@ fn lock_config_io() -> MutexGuard<'static, ()> {
 }
 
 /// 在配置锁内执行「读 → 改 → 写」，避免并发命令互相覆盖。
-/// 回调拿到 `&mut StoredConfig`，禁止在回调里再调 `read_stored_config` / `write_stored_config`
-/// （它们会重入同一把非可重入 Mutex 导致死锁）。返回修改后的配置，供转 `AppConfig`。
+/// 回调只能改传入的 `StoredConfig`；**禁止**在回调里再调 `read_stored_config`
+/// 或 `write_stored_config`（会重入非可重入锁导致死锁）。
 pub fn edit_config(
     f: impl FnOnce(&mut StoredConfig) -> Result<(), String>,
 ) -> Result<StoredConfig, String> {
@@ -43,6 +43,11 @@ pub fn edit_config(
     f(&mut config)?;
     write_stored_config_unlocked(&config)?;
     Ok(config)
+}
+
+/// 只读配置。与 `edit_config` 互斥，保证读到的是一致快照。
+pub fn read_config() -> Result<StoredConfig, String> {
+    read_stored_config()
 }
 
 /// 配置缺字段时的默认刷新间隔（秒）。必须走 serde 默认值，不能依赖派生的 Default：

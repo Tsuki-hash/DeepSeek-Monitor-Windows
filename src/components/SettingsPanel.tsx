@@ -14,6 +14,7 @@ import {
 import { currencySymbol, fmtMoney } from "../format";
 import type { AppConfig, BalanceData, UsageResult } from "../types";
 import { fetchCurrentUsage, refreshOptions } from "../usage-api";
+import { useTheme } from "../theme";
 import { BrandIcon } from "./BrandIcon";
 import { SettingsSection, Toggle } from "./ui";
 
@@ -44,6 +45,7 @@ function SettingsPanel({
   // 空串表示「版本未知」。刻意不写死一个兜底版本号：那个数字会随着发版过期，
   // 显示出来反而是错的信息，不如显示「—」。
   const [appVersion, setAppVersion] = React.useState("");
+  const { theme, toggleTheme } = useTheme();
   const configPath = config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
   React.useEffect(() => {
@@ -88,6 +90,7 @@ function SettingsPanel({
         .catch((error) => {
           const message = typeof error === "string" ? error : "用量刷新失败";
           setUsageStatus(`${prefix}，但用量刷新失败：${message}`);
+          setShowManualPaste(true);
           return null;
         });
     },
@@ -108,7 +111,8 @@ function SettingsPanel({
   React.useEffect(() => {
     const unlistenPromise = listen("usage-sync-ended", () => {
       setUsageSyncing(false);
-      setUsageStatus("登录窗口已关闭，Token 未获取到。可重新点击同步或使用方式二手动粘贴。");
+      setUsageStatus("未获取到用量 Token。可再次点击同步，或使用方式二手动粘贴。");
+      setShowManualPaste(true);
     });
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
@@ -390,6 +394,14 @@ function SettingsPanel({
               ))}
             </div>
           )}
+        </SettingsSection>
+
+        <SettingsSection icon={<Info size={15} />} title="外观">
+          <Toggle
+            label={theme === "dark" ? "深色皮肤（点击切换浅色）" : "浅色皮肤（点击切换深色）"}
+            checked={theme === "light"}
+            onChange={toggleTheme}
+          />
         </SettingsSection>
 
         <SettingsSection icon={<Info size={15} />} title="关于">
