@@ -193,6 +193,12 @@ function App() {
   // （见 lib.rs 的 EVENT_MAIN_WINDOW_SHOWN / EVENT_MAIN_WINDOW_HIDDEN），
   // 这样从托盘唤出、托盘左键切换、程序内点关闭三条路径都覆盖得到。
   const [windowVisible, setWindowVisible] = React.useState(true);
+  // 首帧后按实际窗口可见性校正，避免启动时若已在托盘仍多跑一轮刷新
+  React.useEffect(() => {
+    void invoke<boolean>("is_main_window_visible")
+      .then((visible) => setWindowVisible(visible))
+      .catch(() => undefined);
+  }, []);
 
   React.useEffect(() => {
     const shown = listen("main-window-shown", () => {
@@ -718,7 +724,14 @@ function UsageChart({
           <span>缓存命中明细</span>
         </div>
         <span className="chart-total">
-          {state === "ok" ? `命中率 ${hitRate}% · 合计 ${fmtTokensShort(sumTotal)}` : "—"}
+          {state === "ok" ? (
+            <>
+              命中率 {hitRate}% · 合计 {fmtTokensShort(sumTotal)}
+              {error ? " · 上次刷新失败" : ""}
+            </>
+          ) : (
+            "—"
+          )}
         </span>
       </div>
       {state === "ok" && points.length > 0 ? (

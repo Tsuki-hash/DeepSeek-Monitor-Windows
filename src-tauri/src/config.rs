@@ -18,7 +18,7 @@ use std::{
     },
 };
 
-/// 进程内配置读改写锁（P1-02）。多个 command 并发 save 时 last-write-wins 会丢字段，
+/// 进程内配置读改写锁。多个 command 并发 save 时 last-write-wins 会丢字段，
 /// 用一把全局锁把「读 → 改 → 写」串行化。锁的是本进程；跨进程写同一 config.json
 /// 仍可能出现覆盖（单实例插件已保证只有一个进程，故可接受）。
 fn config_io_lock() -> &'static Mutex<()> {
@@ -32,7 +32,7 @@ fn lock_config_io() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|error| error.into_inner())
 }
 
-/// 在配置锁内执行「读 → 改 → 写」，避免并发命令互相覆盖（P1-02）。
+/// 在配置锁内执行「读 → 改 → 写」，避免并发命令互相覆盖。
 /// 回调拿到 `&mut StoredConfig`，禁止在回调里再调 `read_stored_config` / `write_stored_config`
 /// （它们会重入同一把非可重入 Mutex 导致死锁）。返回修改后的配置，供转 `AppConfig`。
 pub fn edit_config(

@@ -460,4 +460,35 @@ mod tests {
         assert!((result.days[0].total_cost - 0.05).abs() < 1e-9);
         assert_eq!(result.days[0].total_tokens, 70);
     }
+
+    #[test]
+    fn 用量聚合_未知模型计入日total但不进模型行() {
+        let amount_json = r#"{
+            "data": {
+                "biz_data": {
+                    "total": [],
+                    "days": [
+                        {
+                            "date": "2026-09-02",
+                            "data": [
+                                {
+                                    "model": "deepseek-mystery",
+                                    "usage": [
+                                        {"type":"PROMPT_CACHE_HIT_TOKEN","amount":"5.0"},
+                                        {"type":"RESPONSE_TOKEN","amount":"5.0"}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let cost_json = r#"{"data":{"biz_data":[]}}"#;
+        let amount: AmountResp = serde_json::from_str(amount_json).unwrap();
+        let cost: CostResp = serde_json::from_str(cost_json).unwrap();
+        let result = build_usage_result(&amount, &cost);
+        assert!(result.models.is_empty());
+        assert_eq!(result.days[0].total_tokens, 10);
+    }
 }

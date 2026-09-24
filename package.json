@@ -15,6 +15,7 @@
     "test:types": "tsc --noEmit -p tsconfig.test.json",
     "test:unit": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "lint": "eslint src",
+    "verify": "pwsh -NoProfile -File scripts/verify.ps1",
     "check:version": "node scripts/check-version.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

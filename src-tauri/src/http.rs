@@ -17,6 +17,7 @@ pub fn http_client() -> &'static reqwest::Client {
             .user_agent(HTTP_USER_AGENT)
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
             .build()
-            .expect("构建 HTTP 客户端失败")
+            // 极少失败；失败时退回默认 Client，避免 panic 导致托盘进程直接退出
+            .unwrap_or_default()
     })
 }

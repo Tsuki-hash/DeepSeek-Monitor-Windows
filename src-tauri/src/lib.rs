@@ -10,7 +10,7 @@ pub mod window_pos;
 #[cfg(test)]
 mod test_support;
 
-use autostart::apply_autostart;
+use autostart::{apply_autostart, apply_autostart_with_rollback};
 use config::{
     edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
@@ -66,7 +66,7 @@ pub fn run() {
 
     fn position_near_tray(window: &WebviewWindow) -> tauri::Result<()> {
         // 定位锚点优先取托盘图标中心；托盘事件还没发生过（例如从菜单项「显示主面板」
-        // 唤出）时退回光标位置。按锚点最近的工作区边贴靠（P2-12，几何在 window_pos）。
+        // 唤出）时退回光标位置。按锚点最近的工作区边贴靠（几何在 window_pos）。
         let anchor = last_tray_rect()
             .map(|rect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
             .or_else(|| {
@@ -105,7 +105,7 @@ pub fn run() {
         window.set_position(Position::Physical(PhysicalPosition::new(x, y)))
     }
 
-    // 面板显隐事件。窗口隐藏不会卸载 WebView，前端的 setInterval 不会自己停；
+    // 面板显隐事件。窗口隐藏不会卸载 WebView，前端的刷新定时器不会自己停；
     // 反过来，从托盘唤出窗口也不会触发 React 重渲染。两端都要靠事件对齐，
     // 否则会出现"打开面板看到旧数据、收进托盘还在后台轮询"。
     const EVENT_MAIN_WINDOW_SHOWN: &str = "main-window-shown";
@@ -126,7 +126,7 @@ pub fn run() {
         Ok(())
     }
 
-    /// 敏感命令仅允许主面板窗口调用（P0-02）。
+    /// 敏感命令仅允许主面板窗口调用，防止远程登录页等非主窗口上下文滥用。
     fn require_main(window: &WebviewWindow) -> Result<(), String> {
         if window.label() != "main" {
             return Err("非法调用方".to_string());
@@ -138,6 +138,12 @@ pub fn run() {
     fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
         require_main(&window)?;
         hide_main_window_inner(&window)
+    }
+
+    #[tauri::command]
+    fn is_main_window_visible(window: WebviewWindow) -> Result<bool, String> {
+        require_main(&window)?;
+        Ok(window.is_visible().unwrap_or(true))
     }
 
     #[tauri::command]
@@ -197,11 +203,20 @@ pub fn run() {
     #[tauri::command]
     fn save_autostart(window: WebviewWindow, autostart: bool) -> Result<AppConfig, String> {
         require_main(&window)?;
+        // 先改注册表，再落配置；配置失败时回滚注册表，保证两者一致。
         apply_autostart(autostart)?;
-        to_app_config(edit_config(|config| {
+        let persisted = edit_config(|config| {
             config.autostart = autostart;
             Ok(())
-        })?)
+        });
+        let stored = match persisted {
+            Ok(stored) => stored,
+            Err(error) => {
+                let _ = apply_autostart_with_rollback(autostart, false);
+                return Err(error);
+            }
+        };
+        to_app_config(stored)
     }
 
     // 实时查询 DeepSeek 账户余额。DeepSeek 官方仅提供余额接口，无用量接口。
@@ -269,53 +284,19 @@ pub fn run() {
 
     // verify_usage_token 见 deepseek_api 模块。
 
-    /// 本地当前 (year, month)。verify 只要求「能调通用量接口」，用当月即可。
-    fn current_ym() -> (u32, u32) {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut y = 1970u32;
-        let mut d = secs / 86_400;
-        loop {
-            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-            let year_len = if leap { 366 } else { 365 };
-            if d < year_len {
-                break;
-            }
-            d -= year_len;
-            y += 1;
-        }
-        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
-        let md = [
-            31u64,
-            if leap { 29 } else { 28 },
-            31,
-            30,
-            31,
-            30,
-            31,
-            31,
-            30,
-            31,
-            30,
-            31,
-        ];
-        let mut m = 1u32;
-        for len in md {
-            if d < len {
-                break;
-            }
-            d -= len;
-            m += 1;
-        }
-        (y, m)
-    }
+    /// verify 只要求「能调通用量接口」，固定用一个肯定存在的查询月即可，
+    /// 避免用本机时钟推年月时受时区/时钟偏差误伤（真实用量拉取仍用前端传入的月份）。
+    const VERIFY_QUERY_YEAR: u32 = 2026;
+    const VERIFY_QUERY_MONTH: u32 = 1;
 
-    /// 缓存扫描的 accept 回调：verify 通过才接受该 token（P0-06）。
+    /// 缓存扫描的 accept 回调：verify 通过才接受该 token。
     fn accept_verified_cached_token(token: &str) -> bool {
-        let (year, month) = current_ym();
-        tauri::async_runtime::block_on(verify_usage_token(token, month, year)).is_ok()
+        tauri::async_runtime::block_on(verify_usage_token(
+            token,
+            VERIFY_QUERY_MONTH,
+            VERIFY_QUERY_YEAR,
+        ))
+        .is_ok()
     }
 
     fn start_usage_title_watcher(app: tauri::AppHandle, generation: u64) {
@@ -324,7 +305,7 @@ pub fn run() {
             thread::sleep(Duration::from_secs(3));
             let mut scan = CacheScanState::default();
             for _ in 0..1200 {
-                // 新一轮同步已开始：本 watcher 作废（P1-01）
+                // 新一轮同步已开始：本 watcher 作废
                 let current = app
                     .try_state::<Arc<AtomicU64>>()
                     .map(|g| g.load(Ordering::SeqCst))
@@ -353,7 +334,7 @@ pub fn run() {
 
                 if let Ok(title) = window.title() {
                     if let Some(rest) = title.strip_prefix(USAGE_TOKEN_TITLE_PREFIX) {
-                        // 先抹掉 title 再解析：完整凭据在标题里停留的时间越短越好（P0-01）
+                        // 先抹掉 title 再解析：完整凭据在标题里停留的时间越短越好
                         let _ = window
                             .eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
                         // 注入脚本写入的格式：{year}:{month}:{token}
@@ -394,9 +375,9 @@ pub fn run() {
     // 不再依赖 WebView2 磁盘缓存的延迟落盘。
     const USAGE_SYNC_POLL_JS: &str = r#"
     (function() {
-      // 本脚本作为 initialization_script 在 login-sync 的每次导航都会注入，
-      // 而该窗口允许用户自由跳转。这里先收窄作用域：非平台域名直接不装 hook，
-      // 否则用户在这个窗口里访问任何第三方站点时，其 Authorization 头都会被读到。
+      // 本脚本作为 initialization_script 在 login-sync 的每次导航都会注入。
+      // 导航已限制在 DeepSeek 域内；这里再收窄：非平台域名不装 hook，
+      // 避免读到无关页面的 Authorization 头。
       if (location.host !== 'platform.deepseek.com') return;
       if (window.__dsm_token_hook__) return;
       window.__dsm_token_hook__ = true;
@@ -411,8 +392,8 @@ pub fn run() {
         var now = new Date();
         var y = now.getFullYear();
         var m = now.getMonth() + 1;
-        // 主通道：IPC 直传。完整 Bearer 不进 document.title，避免任意进程
-        // 用 EnumWindows/GetWindowText 读到（P0-01）。
+        // 主通道：IPC 直传。完整 Bearer 尽量不进 document.title，
+        // 避免任意进程用 EnumWindows/GetWindowText 读到。
         try {
           if (!pending && window.__TAURI__ && window.__TAURI__.core) {
             pending = true;
@@ -519,7 +500,7 @@ pub fn run() {
             .center()
             .visible(true)
             .initialization_script(USAGE_SYNC_POLL_JS)
-            // 只允许 DeepSeek 站内导航，降低钓鱼/任意站点套壳风险（P0-02）
+            // 只允许 DeepSeek 站内导航，降低钓鱼/任意站点套壳风险
             .on_navigation(|nav_url| {
                 nav_url
                     .host_str()
@@ -550,7 +531,7 @@ pub fn run() {
         month: u32,
         year: u32,
     ) -> Result<AppConfig, String> {
-        // 仅登录窗口可回传 token（P0-02），防止主窗口以外的上下文滥用
+        // 仅登录窗口可回传 token，防止主窗口以外的上下文滥用
         if window.label() != "login-sync" {
             return Err("非法调用方".to_string());
         }
@@ -602,6 +583,7 @@ pub fn run() {
         .manage(Arc::new(AtomicU64::new(0)))
         .invoke_handler(tauri::generate_handler![
             hide_main_window,
+            is_main_window_visible,
             get_app_config,
             save_api_key,
             clear_api_key,

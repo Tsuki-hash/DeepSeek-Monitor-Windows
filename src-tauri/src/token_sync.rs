@@ -39,7 +39,7 @@ pub fn read_shared_text(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
 }
 
-/// 非 Windows：无 WebView2 共享句柄语义，直接整读（P1-04）。
+/// 非 Windows：无 WebView2 共享句柄语义，直接整读。
 #[cfg(not(windows))]
 pub fn read_shared_text(path: &Path) -> Option<String> {
     let metadata = fs::metadata(path).ok()?;
@@ -89,7 +89,7 @@ pub struct CacheScanState {
     seen: HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
 }
 
-/// `seen` 表项上限。缓存目录文件极多时无限增长会拖慢每次扫描（P2-08）；
+/// `seen` 表项上限。缓存目录文件极多时无限增长会拖慢每次扫描；
 /// 超限后整表清空，代价是短暂重读一遍，远好于无界膨胀。
 const MAX_SEEN_ENTRIES: usize = 50_000;
 

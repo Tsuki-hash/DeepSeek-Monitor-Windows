@@ -7,6 +7,16 @@ use std::process::Command;
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "DeepSeekMonitorWindows";
 
+fn reg_delete_value() -> Result<(), String> {
+    let status = Command::new("reg")
+        .args(["delete", RUN_KEY, "/v", VALUE_NAME, "/f"])
+        .status()
+        .map_err(|error| format!("关闭开机自启失败：{error}"))?;
+    // 值本就不存在时 delete 失败属正常
+    let _ = status;
+    Ok(())
+}
+
 pub fn apply_autostart(enabled: bool) -> Result<(), String> {
     if enabled {
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -25,13 +35,18 @@ pub fn apply_autostart(enabled: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    let status = Command::new("reg")
-        .args(["delete", RUN_KEY, "/v", VALUE_NAME, "/f"])
-        .status()
-        .map_err(|error| format!("关闭开机自启失败：{error}"))?;
-    // 值本就不存在时 delete 失败属正常，视为已关闭
-    if !status.success() {
-        return Ok(());
+    reg_delete_value()
+}
+
+/// 注册表与配置需保持一致：配置写入失败时回滚注册表，避免「已自启但设置显示关」。
+pub fn apply_autostart_with_rollback(enabled: bool, persist_ok: bool) -> Result<(), String> {
+    if enabled && !persist_ok {
+        reg_delete_value()?;
+        return Err("开机自启配置保存失败，已回滚注册表".to_string());
+    }
+    if !enabled && !persist_ok {
+        // 关闭方向：配置失败则恢复注册表值为开
+        return apply_autostart(true).map_err(|error| format!("回滚开机自启失败：{error}"));
     }
     Ok(())
 }
