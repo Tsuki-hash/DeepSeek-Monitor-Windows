@@ -14,14 +14,12 @@ pub const USAGE_SYNC_POLL_JS: &str = r#"
         if (!token || typeof token !== 'string') return;
         token = token.trim();
         if (token.length < 20) return;
-        var now = new Date();
-        var y = now.getFullYear();
-        var m = now.getMonth() + 1;
         try {
           if (!pending && window.__TAURI__ && window.__TAURI__.core) {
             pending = true;
+            // 校验月份由后端的东八区探针月统一决定，页面无需传递本地时间
             window.__TAURI__.core.invoke('usage_token_captured', {
-              token: token, month: m, year: y
+              token: token
             }).then(function() { done = true; }).catch(function() { pending = false; });
           }
         } catch (e) {}

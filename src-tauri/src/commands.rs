@@ -15,11 +15,12 @@ use crate::config::{
     edit_config, normalize_refresh_interval_seconds, read_stored_config, to_app_config, AppConfig,
 };
 use crate::deepseek_api::{
-    fetch_balance_with_key, fetch_usage_with_token, verify_usage_token, BalanceResult, UsageResult,
+    fetch_balance_with_key, fetch_usage_with_token, BalanceResult, UsageResult,
 };
 use crate::tray::hide_main_window_inner;
 use crate::usage_watcher::{
     capture_usage_token, open_login_window, prescan_cached_token, spawn_title_watcher,
+    verify_token_with_probes,
 };
 
 /// 敏感命令仅允许主面板窗口调用，防止远程登录页等非主窗口上下文滥用。
@@ -201,6 +202,9 @@ pub(crate) async fn start_usage_sync(
     // 用户随后再点一次本按钮即可命中。不重复弹新窗口、不死等。
     if let Some(login_window) = app.get_webview_window("login-sync") {
         let _ = login_window.eval("location.reload();");
+        // 本次点击已递增代际、作废旧 watcher：reload 后页面会重新请求并落盘
+        // 缓存，必须同步拉起新 watcher，否则自动兜底就在第二次点击后断线
+        spawn_title_watcher(app.clone(), generation);
         return Ok(false);
     }
 
@@ -214,8 +218,6 @@ pub(crate) async fn usage_token_captured(
     window: WebviewWindow,
     app: tauri::AppHandle,
     token: String,
-    month: u32,
-    year: u32,
 ) -> Result<AppConfig, String> {
     // 仅登录窗口可回传 token，防止主窗口以外的上下文滥用
     if window.label() != "login-sync" {
@@ -225,8 +227,9 @@ pub(crate) async fn usage_token_captured(
     if value.is_empty() {
         return Err("用量 Token 为空".to_string());
     }
-    // 先验证再保存：拦截到的 token 可能是登录中途的临时 token，
-    // 只有能真正调用用量接口的才接受
-    verify_usage_token(&value, month, year).await?;
+    // 先验证再保存：拦截到的 token 可能是登录中途的临时 token。
+    // 校验统一走东八区探针月（与预扫描/后台 watcher 一致），不再依赖
+    // 登录窗口本地时区给出的月份
+    verify_token_with_probes(&value).await?;
     capture_usage_token(&app, value)
 }

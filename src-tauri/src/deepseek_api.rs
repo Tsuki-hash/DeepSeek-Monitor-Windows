@@ -81,8 +81,33 @@ pub async fn fetch_balance_with_key(api_key: &str) -> Result<BalanceResult, Stri
     parse_balance(BalanceResponse::from_json(&text)?)
 }
 
+/// 用量 Token 校验失败的性质。
+/// **Definitive**：Token 本身被明确拒绝（401/403），与探针月份无关，重试没有意义；
+/// **Transient**：网络、服务端或路由类失败（连接错误/404/429/5xx），值得稍后重试。
+///
+/// 用量拉取路径（`get_json`）保留按状态码分级的完整文案；校验路径只关心
+/// 「要不要重试」，因此收敛成两值枚举供同步链路做不同处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyFailure {
+    Definitive,
+    Transient,
+}
+
+impl VerifyFailure {
+    pub fn message(self) -> String {
+        match self {
+            VerifyFailure::Definitive => {
+                "用量 Token 无效或已过期，请重新同步或手动粘贴用量 Token".to_string()
+            }
+            VerifyFailure::Transient => {
+                "用量接口暂时不可用，请稍后重试；余额查询不受影响".to_string()
+            }
+        }
+    }
+}
+
 /// 用 token 试调平台用量接口，验证它确实是有效的用量 token。
-pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<(), String> {
+pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<(), VerifyFailure> {
     let url =
         format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
     let resp = http_client()
@@ -92,14 +117,12 @@ pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<()
         .header("Accept", "*/*")
         .send()
         .await
-        .map_err(|error| format!("验证 token 失败：{error}"))?;
-    if resp.status().as_u16() == 200 {
-        Ok(())
-    } else {
-        Err(format!(
-            "token 校验未通过（HTTP {}），请重新同步或手动粘贴用量 Token",
-            resp.status().as_u16()
-        ))
+        .map_err(|_| VerifyFailure::Transient)?;
+    match resp.status().as_u16() {
+        200 => Ok(()),
+        // 401/403 是对凭据本身的明确拒绝，与查询月份无关
+        401 | 403 => Err(VerifyFailure::Definitive),
+        _ => Err(VerifyFailure::Transient),
     }
 }
 

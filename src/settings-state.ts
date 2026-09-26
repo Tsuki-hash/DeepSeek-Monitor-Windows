@@ -91,6 +91,8 @@ export function useSettingsState(handlers: {
   // 空串表示「版本未知」。刻意不写死一个兜底版本号：那个数字会随着发版过期，
   // 显示出来反而是错的信息，不如显示「—」。
   const [appVersion, setAppVersion] = React.useState("");
+  // 「等待登录」的自动解锁定时器：组件卸载时清理，避免卸载后回调触发 setState
+  const syncResetTimer = React.useRef(0);
   const configPath =
     config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
@@ -128,6 +130,8 @@ export function useSettingsState(handlers: {
       .then(setAppVersion)
       .catch(() => setAppVersion(""));
   }, []);
+
+  React.useEffect(() => () => window.clearTimeout(syncResetTimer.current), []);
 
   // 保存 Token 之后刷新用量。这里刻意不向外抛出（见 useSettingsActions）。
   const refreshUsageAfterToken = useSettingsActions({
@@ -236,7 +240,10 @@ export function useSettingsState(handlers: {
       })
       .finally(() => {
         // 短暂忙碌后自动恢复可点击，允许用户登录后反复点击触发同步
-        window.setTimeout(() => setUsageSyncing(false), 2500);
+        syncResetTimer.current = window.setTimeout(
+          () => setUsageSyncing(false),
+          2500,
+        );
       });
   }, []);
 

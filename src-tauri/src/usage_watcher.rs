@@ -19,9 +19,12 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::cache_watch;
 use crate::config::{edit_config, to_app_config, AppConfig};
-use crate::deepseek_api::verify_usage_token;
+use crate::deepseek_api::{verify_usage_token, VerifyFailure};
 use crate::sync_script::USAGE_SYNC_POLL_JS;
-use crate::token_sync::{collect_webview_cached_usage_tokens, webview_cache_dir, CacheScanState};
+use crate::token_sync::{
+    collect_webview_cached_usage_tokens, mark_seen, webview_cache_dir, CacheScanState,
+    CachedCandidate,
+};
 
 /// 仅用于识别并清除历史 title 通道残留，不再解析其中的 token。
 pub(crate) const USAGE_TOKEN_TITLE_PREFIX: &str = "DSM_USAGE_TOKEN:";
@@ -78,59 +81,96 @@ fn verify_probe_months(now: SystemTime) -> Vec<(u32, u32)> {
     vec![(month, year), previous]
 }
 
-/// 逐个试调验证一个候选 token；任一探针月通过即认为有效。
-async fn token_passes_probes(token: &str, probes: &[(u32, u32)]) -> bool {
-    for (month, year) in probes {
-        if verify_usage_token(token, *month, *year).await.is_ok() {
-            return true;
-        }
-    }
-    false
+/// 探针结果：通过 / 明确拒绝（401/403，与探针月份无关）/ 暂不可用（网络、
+/// 服务端或路由类失败，值得换探针月或稍后重试）。
+enum ProbeOutcome {
+    Passed,
+    Rejected,
+    Unavailable,
 }
 
-/// 候选全部验证失败的告警。只落计数不落内容：排障需要的是
-/// 「有没有候选、验了几次」，token 本身与缓存原文绝不能进日志。
-fn log_all_candidates_rejected(candidate_count: usize, probe_count: usize) {
-    log::warn!(
-        "缓存的 {candidate_count} 个候选用量 Token 均未通过校验（每候选试调 {probe_count} 个月），请重新同步或手动粘贴"
-    );
+async fn probe_token(token: &str, probes: &[(u32, u32)]) -> ProbeOutcome {
+    for (month, year) in probes {
+        match verify_usage_token(token, *month, *year).await {
+            Ok(()) => return ProbeOutcome::Passed,
+            // 对凭据本身的拒绝与查询月份无关，无需再试其他探针月
+            Err(VerifyFailure::Definitive) => return ProbeOutcome::Rejected,
+            Err(VerifyFailure::Transient) => {}
+        }
+    }
+    ProbeOutcome::Unavailable
+}
+
+/// 收集到的候选逐一验证：
+/// - 通过 → 返回该 token，来源文件保持未标记（成功即同步结束，状态随之丢弃）；
+/// - 明确拒绝 → 回写已读标记，后续轮次不再弹出；
+/// - 瞬时失败 → 保持未标记，下一轮自动重试（否则一次网络抖动会把有效
+///   Token 静默压制到文件内容变化为止）。
+///
+/// 日志只落计数，token 本身与缓存原文绝不进日志。
+async fn verify_candidates(
+    scan: &mut CacheScanState,
+    candidates: Vec<CachedCandidate>,
+) -> Option<String> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let probes = verify_probe_months(SystemTime::now());
+    let mut rejected = 0usize;
+    let mut unavailable = 0usize;
+    for candidate in candidates {
+        match probe_token(&candidate.token, &probes).await {
+            ProbeOutcome::Passed => return Some(candidate.token),
+            ProbeOutcome::Rejected => {
+                mark_seen(scan, candidate.path, candidate.stamp);
+                rejected += 1;
+            }
+            ProbeOutcome::Unavailable => unavailable += 1,
+        }
+    }
+    if unavailable > 0 {
+        log::warn!(
+            "缓存的 {unavailable} 个候选用量 Token 因网络/服务端原因暂未验证成功，下轮自动重试"
+        );
+    }
+    if rejected > 0 {
+        log::warn!("缓存的 {rejected} 个候选用量 Token 已被明确拒绝，请重新同步或手动粘贴");
+    }
+    None
+}
+
+/// 收集 + 验证的完整一轮（两者分离，见 token_sync 的收集语义）。
+async fn collect_and_verify(scan: &mut CacheScanState) -> Option<String> {
+    let candidates = collect_webview_cached_usage_tokens(scan);
+    verify_candidates(scan, candidates).await
 }
 
 /// 缓存预扫描（点击同步时先跑一次）：收集候选并逐个验证，命中即返回。
 /// 收集在 spawn_blocking（同步 IO），验证是异步请求，不占 runtime 工作线程。
 pub(crate) async fn prescan_cached_token() -> Option<String> {
-    let candidates = tauri::async_runtime::spawn_blocking(|| {
-        collect_webview_cached_usage_tokens(&mut CacheScanState::default())
+    let (candidates, mut scan) = tauri::async_runtime::spawn_blocking(move || {
+        let mut scan = CacheScanState::default();
+        let candidates = collect_webview_cached_usage_tokens(&mut scan);
+        (candidates, scan)
     })
     .await
     .ok()?;
-    let candidate_count = candidates.len();
-    let probes = verify_probe_months(SystemTime::now());
-    for token in candidates {
-        if token_passes_probes(&token, &probes).await {
-            return Some(token);
-        }
-    }
-    if candidate_count > 0 {
-        log_all_candidates_rejected(candidate_count, probes.len());
-    }
-    None
+    verify_candidates(&mut scan, candidates).await
 }
 
-/// watcher 线程用的阻塞版「收集 + 验证」，语义与 `prescan_cached_token` 一致。
-fn collect_and_verify_cached_token(scan: &mut CacheScanState) -> Option<String> {
-    let candidates = collect_webview_cached_usage_tokens(scan);
-    let candidate_count = candidates.len();
+/// IPC 捕获路径的统一校验：与预扫描/后台 watcher 一样走东八区探针月，
+/// 不依赖登录窗口本地时区给出的月份（海外时区在月初边界会错拿月份，
+/// 可能把有效 Token 误判失效）。
+pub(crate) async fn verify_token_with_probes(token: &str) -> Result<(), String> {
     let probes = verify_probe_months(SystemTime::now());
-    for token in candidates {
-        if tauri::async_runtime::block_on(token_passes_probes(&token, &probes)) {
-            return Some(token);
+    for (month, year) in probes {
+        match verify_usage_token(token, month, year).await {
+            Ok(()) => return Ok(()),
+            Err(VerifyFailure::Definitive) => return Err(VerifyFailure::Definitive.message()),
+            Err(VerifyFailure::Transient) => {}
         }
     }
-    if candidate_count > 0 {
-        log_all_candidates_rejected(candidate_count, probes.len());
-    }
-    None
+    Err(VerifyFailure::Transient.message())
 }
 
 /// 三条捕获路径共用的落库动作：写配置、置成功标志、关登录窗、广播事件。
@@ -217,9 +257,11 @@ pub(crate) fn spawn_title_watcher(app: tauri::AppHandle, generation: u64) {
                 log::info!("用量同步 watcher 因新一轮同步而退出（代际 {generation} → {current}）");
                 return;
             }
-            if let Some(token) = collect_and_verify_cached_token(&mut scan) {
+            if let Some(token) = tauri::async_runtime::block_on(collect_and_verify(&mut scan)) {
                 if let Err(error) = capture_usage_token(&app, token) {
                     log::warn!("用量 Token 捕获后保存失败：{error}");
+                    // 前端仍处于等待态：通知其结束，避免停在旧状态
+                    let _ = app.emit("usage-sync-ended", ());
                 }
                 return;
             }

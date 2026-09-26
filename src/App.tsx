@@ -197,6 +197,9 @@ function App() {
       {view === "settings" && (
         <SettingsPanel
           onUsageLoaded={(nextUsage) => {
+            // 设置页的刷新代表更新的意图：作废 App 侧在途的旧请求，
+            // 避免慢响应返回后把设置页刚拿到的数据覆盖掉
+            usageRequestId.current += 1;
             setUsage(nextUsage);
             setUsageState("ok");
             setUsageError("");

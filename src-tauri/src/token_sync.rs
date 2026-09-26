@@ -102,7 +102,7 @@ pub struct CacheScanState {
 }
 
 /// 表项内容指纹：文件大小 + 修改时间。
-type Stamp = (u64, Option<std::time::SystemTime>);
+pub(crate) type Stamp = (u64, Option<std::time::SystemTime>);
 
 /// `seen` 表项上限。超过后按 LRU 淘汰到 3/4，保留近期文件的去重信息。
 const MAX_SEEN_ENTRIES: usize = 50_000;
@@ -114,7 +114,7 @@ const ORDER_BLOAT_SLACK: usize = 64;
 
 /// 记录「该路径本轮已处理过」。已有表项且内容指纹变化（刚被重读）视为一次
 /// LRU 触碰，换新代际号挪到队尾。
-fn mark_seen(scan: &mut CacheScanState, path: PathBuf, stamp: Stamp) {
+pub(crate) fn mark_seen(scan: &mut CacheScanState, path: PathBuf, stamp: Stamp) {
     match scan.seen.get_mut(&path) {
         Some(entry) => {
             if entry.0 != stamp {
@@ -182,14 +182,28 @@ pub fn webview_cache_dir() -> Option<PathBuf> {
     )
 }
 
-/// 收集缓存目录里全部通过上下文校验的候选 token（按文件遍历顺序，值去重）。
+/// 收集到的候选 token 及其来源文件。验证方在「明确拒绝」时用它回写已读标记，
+/// 在「瞬时失败」时保持不标记，让下一轮扫描自动重试。
+#[derive(Debug, Clone)]
+pub struct CachedCandidate {
+    pub token: String,
+    pub path: PathBuf,
+    pub stamp: Stamp,
+}
+
+/// 收集缓存目录里全部通过上下文校验的候选 token（按文件遍历顺序，按值去重）。
 ///
-/// 与旧的「边扫边验证」不同（评审 F-25）：本函数只负责收集，token 的网络验证由
+/// 「收集」与「验证」分离（评审 F-25）：本函数只负责收集，token 的网络验证由
 /// 调用方在扫描完成后统一进行——单个候选的验证（HTTP 超时上限 15s）不再卡住
-/// 其余文件的扫描。所有处理过的文件都记入 `seen`：验证失败的候选不会在后续
-/// 轮次重复弹出（与旧行为一致）；文件内容变化（stamp 变化）后会重新收集。
-pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<String> {
-    let mut candidates: Vec<String> = Vec::new();
+/// 其余文件的扫描。
+///
+/// 已读标记的语义（评审 F-07 实测加固）：
+/// - 无候选、不可读、或 token 均为已知重复的文件 → 立即记入 `seen`；
+/// - 产出新候选的文件**暂不标记**，由验证方决定：明确拒绝（401/403）才回写
+///   标记；瞬时失败（网络/服务端）保持未标记，下一轮自动重试——否则一次
+///   网络抖动就会把有效 Token 静默压制到文件内容变化为止。
+pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<CachedCandidate> {
+    let mut candidates: Vec<CachedCandidate> = Vec::new();
     let Some(cache_dir) = webview_cache_dir() else {
         return candidates;
     };
@@ -197,6 +211,7 @@ pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<Str
         return candidates;
     };
     let mut read_files = 0usize;
+    let mut known_tokens = std::collections::HashSet::new();
     for entry in entries.flatten() {
         let path = entry.path();
         // 取一次元数据同时完成「是否普通文件」与「是否变动」两项判断，比 is_file()
@@ -219,15 +234,20 @@ pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<Str
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
-        if let Some(text) = read_shared_text(&path) {
-            read_files += 1;
-            candidates.extend(extract_user_api_tokens(&text));
+        let Some(text) = read_shared_text(&path) else {
+            mark_seen(scan, path, stamp);
+            continue;
+        };
+        read_files += 1;
+        // 每个文件只取第一个新 token 作为候选；候选文件留给验证方标记
+        let new_token = extract_user_api_tokens(&text)
+            .into_iter()
+            .find(|token| known_tokens.insert(token.clone()));
+        match new_token {
+            Some(token) => candidates.push(CachedCandidate { token, path, stamp }),
+            None => mark_seen(scan, path, stamp),
         }
-        mark_seen(scan, path, stamp);
     }
-    // 同一 token 可能散落在多个缓存文件里，按值去重避免重复试调
-    let mut seen_values = std::collections::HashSet::new();
-    candidates.retain(|token| seen_values.insert(token.clone()));
     log::debug!(
         "缓存扫描：读取 {read_files} 个新/变更文件，候选 token {} 个",
         candidates.len()
@@ -238,6 +258,7 @@ pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempConfigDir;
 
     /// 构造一段带完整登录态上下文的缓存文本
     fn cache_text_with(token: &str) -> String {
@@ -342,7 +363,9 @@ mod tests {
 
     #[test]
     fn collect_在缓存目录缺失时_返回空表() {
-        // 未登录过（缓存目录不存在）不应 panic，只返回空候选
+        // 未登录过（缓存目录不存在）不应 panic，只返回空候选。
+        // TempConfigDir 持有全局锁：与下面的写入用例串行，避免 LOCALAPPDATA 互踩
+        let _dir = TempConfigDir::new("collect-missing-localappdata");
         let mut scan = CacheScanState::default();
         let previous = std::env::var_os("LOCALAPPDATA");
         std::env::set_var(
@@ -355,6 +378,36 @@ mod tests {
             None => std::env::remove_var("LOCALAPPDATA"),
         }
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn collect_命中候选_重复文件与无候选文件记入已读() {
+        // 借 TempConfigDir 的全局锁串行化 LOCALAPPDATA 操作，并借它的路径当根目录
+        let dir = TempConfigDir::new("collect-candidates");
+        let cache = dir
+            .path()
+            .join("com.deepseek.monitor.windows/EBWebView/Default/Cache/Cache_Data");
+        std::fs::create_dir_all(&cache).unwrap();
+        let token = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
+        std::fs::write(cache.join("f_000001"), cache_text_with(token)).unwrap();
+        std::fs::write(cache.join("f_000002"), cache_text_with(token)).unwrap();
+        std::fs::write(cache.join("f_000003"), b"no token here").unwrap();
+
+        let previous = std::env::var_os("LOCALAPPDATA");
+        std::env::set_var("LOCALAPPDATA", dir.path());
+        let mut scan = CacheScanState::default();
+        let found = collect_webview_cached_usage_tokens(&mut scan);
+        match previous {
+            Some(value) => std::env::set_var("LOCALAPPDATA", value),
+            None => std::env::remove_var("LOCALAPPDATA"),
+        }
+
+        // 同 token 的两个文件只出一个候选（首个文件）；候选文件保持未标记，
+        // 等待验证结果决定是否回写；重复文件与无候选文件立即记入已读
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].token, token);
+        assert_eq!(found[0].path, cache.join("f_000001"));
+        assert_eq!(scan.seen.len(), 2, "候选文件应保持未标记");
     }
 
     // —— CacheScanState 惰性 LRU（白盒：直接操作内部状态） ——
