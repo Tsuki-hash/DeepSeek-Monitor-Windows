@@ -22,6 +22,8 @@ IMPLEMENTATION_NOTES.md
 docs/
 .workbuddy/
 .release-notes.md
+# AI 助手工具的本地配置文件（评审 F-30）
+.zcodeignore
 
 # ---------- Local environment and secrets ----------
 .npmrc

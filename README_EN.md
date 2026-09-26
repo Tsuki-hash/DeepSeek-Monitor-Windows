@@ -228,8 +228,14 @@ See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) 
 
 - Login sync now watches the WebView2 cache directory for changes (Windows `ReadDirectoryChangesW`): after a web login, sync typically completes within a few hundred milliseconds (previously it waited up to 1.5s for the next poll); idle periods no longer rescan the whole directory, keeping CPU/IO low with large caches. If the watch fails (e.g. the directory is recreated) it falls back to the previous polling rhythm automatically.
 - The cache dedup table now uses lazy LRU eviction: frequently updated "hot" files are no longer evicted first, and eviction is O(1) instead of shifting large slices — fewer repeated reads in long sessions.
+- Cache candidates are now collected first and verified afterwards: a single token's network check no longer blocks scanning of the remaining cache files, keeping login-sync latency predictable.
+- Token verification probes the current month (UTC+8) and the previous month instead of a fixed historical month, so platform-side archiving of old data cannot break verification.
+- Added non-sensitive diagnostics to the sync logs (watcher exit reasons, candidate verification outcomes — no credential content ever logged).
+- Dashboard refreshes now carry a request guard: a slow stale response no longer overwrites newer data when manual refresh, auto-refresh and tray-restore overlap.
+- `lib.rs` split from 616 to 82 lines (`commands.rs`, `tray.rs`, `usage_watcher.rs`) so command permissions can be audited in one place.
 - Repo-wide Prettier check (`npm run format` / verify gate), fixing Windows line-ending false positives.
-- 7 new unit tests covering the cache watch and LRU eviction (73 Rust tests in total).
+- Decision recorded: no remote CI (settled 2026-09-26); local `npm run verify` remains the gate before pushing.
+- 12 new unit tests covering the cache watch, LRU eviction and probe months (78 Rust tests in total).
 
 Installer: `DeepSeekMonitorWindows_1.2.4_x64-setup.exe`.
 

@@ -3,6 +3,9 @@
 # 需要：PowerShell 7+（pwsh）、Node 22+、Rust MSVC 工具链。
 # Windows PowerShell 5.1 不支持本脚本的调用方式，请安装 PowerShell 7。
 
+# 统一输出编码，避免中文在非 UTF-8 控制台里乱码
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 

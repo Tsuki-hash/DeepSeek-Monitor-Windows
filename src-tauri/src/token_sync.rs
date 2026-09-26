@@ -50,12 +50,13 @@ pub fn read_shared_text(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
 }
 
-/// 从缓存文本里提取网页登录 token。
+/// 从缓存文本里提取全部满足登录态上下文特征的 token（按出现顺序）。
 ///
 /// 匹配策略：找 `"token":"..."`，并检查其后 1800 字符内同时出现 `id_profile` 与
 /// `feature_gates` 两个上下文特征。这两个字段是登录态用户对象的组成部分，
 /// 用来把真正的用户 token 和平台前端里其它同名短字符串区分开。
-pub fn extract_user_api_token(text: &str) -> Option<String> {
+pub fn extract_user_api_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
     let mut search_from = 0;
     let marker = "\"token\":\"";
     while let Some(relative_index) = text[search_from..].find(marker) {
@@ -72,11 +73,16 @@ pub fn extract_user_api_token(text: &str) -> Option<String> {
             && context.contains("\"id_profile\"")
             && context.contains("\"feature_gates\"")
         {
-            return Some(token.to_string());
+            tokens.push(token.to_string());
         }
         search_from = token_end + 1;
     }
-    None
+    tokens
+}
+
+/// 提取第一个满足上下文特征的 token。
+pub fn extract_user_api_token(text: &str) -> Option<String> {
+    extract_user_api_tokens(text).into_iter().next()
 }
 
 /// 轮询缓存目录的去重状态：path -> (文件大小, 修改时间)。
@@ -176,16 +182,21 @@ pub fn webview_cache_dir() -> Option<PathBuf> {
     )
 }
 
-/// 在 WebView2 缓存目录里找用量 token。
+/// 收集缓存目录里全部通过上下文校验的候选 token（按文件遍历顺序，值去重）。
 ///
-/// `accept` 用于在外层做网络校验：返回 `false` 表示该 token 不可用，继续扫下一个文件；
-/// 命中且接受的文件不写入 `seen`，便于调用方重试。未解析出 token 的文件才记入 `seen` 以跳过整读。
-pub fn find_webview_cached_usage_token(
-    scan: &mut CacheScanState,
-    accept: &mut dyn FnMut(&str) -> bool,
-) -> Option<String> {
-    let cache_dir = webview_cache_dir()?;
-    let entries = fs::read_dir(cache_dir).ok()?;
+/// 与旧的「边扫边验证」不同（评审 F-25）：本函数只负责收集，token 的网络验证由
+/// 调用方在扫描完成后统一进行——单个候选的验证（HTTP 超时上限 15s）不再卡住
+/// 其余文件的扫描。所有处理过的文件都记入 `seen`：验证失败的候选不会在后续
+/// 轮次重复弹出（与旧行为一致）；文件内容变化（stamp 变化）后会重新收集。
+pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let Some(cache_dir) = webview_cache_dir() else {
+        return candidates;
+    };
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return candidates;
+    };
+    let mut read_files = 0usize;
     for entry in entries.flatten() {
         let path = entry.path();
         // 取一次元数据同时完成「是否普通文件」与「是否变动」两项判断，比 is_file()
@@ -208,24 +219,20 @@ pub fn find_webview_cached_usage_token(
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
-        let Some(text) = read_shared_text(&path) else {
-            mark_seen(scan, path, stamp);
-            continue;
-        };
-        match extract_user_api_token(&text) {
-            Some(token) => {
-                if accept(&token) {
-                    return Some(token);
-                }
-                // 调用方拒收（校验失败）：记入 seen，避免同一坏 token 每次轮询重复弹出
-                mark_seen(scan, path, stamp);
-            }
-            None => {
-                mark_seen(scan, path, stamp);
-            }
+        if let Some(text) = read_shared_text(&path) {
+            read_files += 1;
+            candidates.extend(extract_user_api_tokens(&text));
         }
+        mark_seen(scan, path, stamp);
     }
-    None
+    // 同一 token 可能散落在多个缓存文件里，按值去重避免重复试调
+    let mut seen_values = std::collections::HashSet::new();
+    candidates.retain(|token| seen_values.insert(token.clone()));
+    log::debug!(
+        "缓存扫描：读取 {read_files} 个新/变更文件，候选 token {} 个",
+        candidates.len()
+    );
+    candidates
 }
 
 #[cfg(test)]
@@ -322,20 +329,32 @@ mod tests {
     }
 
     #[test]
-    fn find_在缓存目录缺失时_返回_none() {
-        // 未登录过（缓存目录不存在）不应 panic，只返回未命中
+    fn extract_全部_按顺序取出多个候选() {
+        let a = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6";
+        let b = "z9y8x7w6v5u4t3s2r1q0p9o8n7m6l5k4";
+        let text = format!("{}{}", cache_text_with(a), cache_text_with(b));
+        assert_eq!(
+            extract_user_api_tokens(&text),
+            vec![a.to_string(), b.to_string()]
+        );
+        assert_eq!(extract_user_api_token(&text).as_deref(), Some(a));
+    }
+
+    #[test]
+    fn collect_在缓存目录缺失时_返回空表() {
+        // 未登录过（缓存目录不存在）不应 panic，只返回空候选
         let mut scan = CacheScanState::default();
         let previous = std::env::var_os("LOCALAPPDATA");
         std::env::set_var(
             "LOCALAPPDATA",
             std::env::temp_dir().join("dsm-test-no-such-localappdata"),
         );
-        let found = find_webview_cached_usage_token(&mut scan, &mut |_| true);
+        let found = collect_webview_cached_usage_tokens(&mut scan);
         match previous {
             Some(value) => std::env::set_var("LOCALAPPDATA", value),
             None => std::env::remove_var("LOCALAPPDATA"),
         }
-        assert_eq!(found, None);
+        assert!(found.is_empty());
     }
 
     // —— CacheScanState 惰性 LRU（白盒：直接操作内部状态） ——
