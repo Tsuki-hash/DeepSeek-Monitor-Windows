@@ -243,9 +243,10 @@ DeepSeek-Monitor-Windows/
 **工程**
 
 - `lib.rs` 从 616 行拆分至 82 行（命令层 `commands.rs`、托盘 `tray.rs`、登录同步 `usage_watcher.rs`），命令权限可集中审计。
+- 设置页状态与动作拆分至 `settings-state.ts`，组件只留视图；配置写锁新增重入 fail-fast 防护（误用立即报错而非死锁）。
 - 全仓接入 Prettier（`npm run format` / verify 门禁检查），并修复 Windows 行尾导致的检查误报。
 - 决策记录：不恢复远程 CI（2026-09-26 拍板），推送前以本地 `npm run verify` 为门禁。
-- 新增 12 项单元测试锁定缓存监听、LRU 淘汰与试调月口径（Rust 合计 78 项）。
+- 新增 14 项单元测试锁定缓存监听、LRU 淘汰、试调月口径与配置锁防护（Rust 合计 80 项）。
 
 安装包为 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe`。
 

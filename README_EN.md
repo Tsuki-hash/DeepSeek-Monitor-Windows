@@ -233,9 +233,10 @@ See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) 
 - Added non-sensitive diagnostics to the sync logs (watcher exit reasons, candidate verification outcomes — no credential content ever logged).
 - Dashboard refreshes now carry a request guard: a slow stale response no longer overwrites newer data when manual refresh, auto-refresh and tray-restore overlap.
 - `lib.rs` split from 616 to 82 lines (`commands.rs`, `tray.rs`, `usage_watcher.rs`) so command permissions can be audited in one place.
+- Settings state and actions moved to `settings-state.ts` (the component is view-only); the config write lock now fails fast on re-entrancy instead of deadlocking.
 - Repo-wide Prettier check (`npm run format` / verify gate), fixing Windows line-ending false positives.
 - Decision recorded: no remote CI (settled 2026-09-26); local `npm run verify` remains the gate before pushing.
-- 12 new unit tests covering the cache watch, LRU eviction and probe months (78 Rust tests in total).
+- 14 new unit tests covering the cache watch, LRU eviction, probe months and lock hardening (80 Rust tests in total).
 
 Installer: `DeepSeekMonitorWindows_1.2.4_x64-setup.exe`.
 

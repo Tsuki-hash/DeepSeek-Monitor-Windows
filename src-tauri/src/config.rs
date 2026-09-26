@@ -16,6 +16,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Mutex, MutexGuard, OnceLock,
     },
+    thread::ThreadId,
 };
 
 /// 进程内配置读改写锁。多个 command 并发 save 时 last-write-wins 会丢字段，
@@ -26,10 +27,59 @@ fn config_io_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn lock_config_io() -> MutexGuard<'static, ()> {
-    config_io_lock()
+/// 锁的持有线程。std 的 Mutex 不可重入，同线程二次加锁会**永久死锁**，
+/// 这里在阻塞前先查持有人，把重入变成立即 panic（评审 F-08）：
+/// 「edit_config 回调里误调 read_stored_config」从静默挂死变成启动即崩的明确错误。
+fn config_io_owner() -> &'static Mutex<Option<ThreadId>> {
+    static OWNER: OnceLock<Mutex<Option<ThreadId>>> = OnceLock::new();
+    OWNER.get_or_init(|| Mutex::new(None))
+}
+
+/// 配置 IO 锁守卫：Drop 时清空持有人记录。
+struct ConfigIoGuard {
+    _inner: MutexGuard<'static, ()>,
+    owner: ThreadId,
+}
+
+impl Drop for ConfigIoGuard {
+    fn drop(&mut self) {
+        // 中毒也要恢复清理：panic 留下的毒标若让本处静默跳过，
+        // 残留的持有人记录会把后续的串行加锁误判成重入
+        let mut slot = config_io_owner()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *slot == Some(self.owner) {
+            *slot = None;
+        }
+    }
+}
+
+fn lock_config_io() -> ConfigIoGuard {
+    let thread = std::thread::current().id();
+    // 先对持有人做快照并立刻放开 owner 锁，再比较与 panic——
+    // panic 绝不能发生在持有任何锁的点上，否则 Mutex 中毒会破坏后续清理
+    let held_by = {
+        let slot = config_io_owner()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *slot
+    };
+    if held_by == Some(thread) {
+        panic!(
+            "配置 IO 锁重入：edit_config 回调内不得调用 read_stored_config / write_stored_config / edit_config（会死锁）"
+        );
+    }
+    let inner = config_io_lock()
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(|error| error.into_inner());
+    let mut slot = config_io_owner()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *slot = Some(thread);
+    ConfigIoGuard {
+        _inner: inner,
+        owner: thread,
+    }
 }
 
 /// 在配置锁内执行「读 → 改 → 写」，避免并发命令互相覆盖。
@@ -576,6 +626,33 @@ mod tests {
         for rejected in [0, 1, 59, 61, 299, 9999, u64::MAX] {
             assert_eq!(normalize_refresh_interval_seconds(rejected), 60);
         }
+    }
+
+    #[test]
+    fn edit_config_回调内重入_fail_fast_而非死锁() {
+        // F-08 的回归测试：回调内误调 read_stored_config 曾经会永久死锁，
+        // 现在应在加锁前检测到同线程持锁并立即 panic（catch_unwind 验证）。
+        let _dir = TempConfigDir::new("reentrant_fail_fast");
+        let result = std::panic::catch_unwind(|| {
+            let _ = edit_config(|_config| {
+                let _ = read_stored_config();
+                Ok(())
+            });
+        });
+        assert!(result.is_err(), "同线程重入应触发 fail-fast panic");
+    }
+
+    #[test]
+    fn edit_config_串行正常使用_不死锁不误报() {
+        // 防护不能误伤：串行地先 edit 再 read（非重入）必须照常工作
+        let _dir = TempConfigDir::new("reentrant_ok");
+        let stored = edit_config(|config| {
+            config.refresh_interval_seconds = 300;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(stored.refresh_interval_seconds, 300);
+        assert_eq!(read_stored_config().unwrap().refresh_interval_seconds, 300);
     }
 
     #[test]
