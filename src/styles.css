@@ -1307,6 +1307,17 @@ button:disabled {
 [data-theme="light"] .configured {
   color: #16a34a;
 }
+/* 未配置：文字淡灰、图标红叉。放在主题覆盖之后且带 .missing 提高特异性，
+   避免被 [data-theme=light] .configured 的绿色压回 */
+.configured.missing {
+  color: var(--text-faint);
+}
+.configured.missing svg {
+  color: #ef5350;
+}
+[data-theme="light"] .configured.missing svg {
+  color: #d92d20;
+}
 [data-theme="light"] .toggle-row i {
   background: rgba(40, 70, 100, 0.22);
 }

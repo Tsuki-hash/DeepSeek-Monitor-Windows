@@ -68,13 +68,19 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 ### 方式二：手动粘贴（兜底）
 
-点 **方式二：手动粘贴 token** 展开。用浏览器登录 platform.deepseek.com，按 F12 打开控制台，输入：
+点 **方式二：手动粘贴 token** 展开。用浏览器登录 platform.deepseek.com，按 F12 打开开发者工具，**切到「控制台 / Console」标签**，在 `❯` 提示符后输入：
 
 ```js
 JSON.parse(localStorage.userToken).value
 ```
 
 复制返回的字符串，粘进输入框，点 **保存 Token**。
+
+若返回 `undefined`（平台可能调整了存储键名），改输入下面这条列出候选键，从结果里找形如 token 的长字符串复制：
+
+```js
+Object.entries(localStorage).filter(([k]) => /token/i.test(k))
+```
 
 **用量 Token 会过期。查不出用量时，重新同步一次就行。**
 

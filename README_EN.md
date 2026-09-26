@@ -68,13 +68,19 @@ The app hooks the network requests the page makes, reads the Bearer token straig
 
 ### Method 2: paste it manually (fallback)
 
-Click **方式二：手动粘贴 token** to expand. Sign in to platform.deepseek.com in a browser, press F12 to open the console, and run:
+Click **方式二：手动粘贴 token** to expand. Sign in to platform.deepseek.com in a browser, press F12 to open DevTools, **switch to the Console tab**, and run at the `❯` prompt:
 
 ```js
 JSON.parse(localStorage.userToken).value
 ```
 
 Copy the returned string, paste it into the field, and click **保存 Token**.
+
+If it returns `undefined` (the platform may have renamed the storage key), run this instead to list candidate keys and copy the token-looking value from the result:
+
+```js
+Object.entries(localStorage).filter(([k]) => /token/i.test(k))
+```
 
 **The usage token expires. When usage stops loading, just sync it again.**
 

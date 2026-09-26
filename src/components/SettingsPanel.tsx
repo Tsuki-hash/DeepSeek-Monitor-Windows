@@ -7,6 +7,7 @@ import {
   Power,
   RefreshCw,
   X,
+  XCircle,
 } from "lucide-react";
 import { refreshOptions } from "../usage-api";
 import { useTheme } from "../theme";
@@ -118,12 +119,14 @@ function SettingsPanel({
             </button>
             <span
               className={
-                config?.apiKeyConfigured
-                  ? "configured"
-                  : "configured muted-status"
+                config?.apiKeyConfigured ? "configured" : "configured missing"
               }
             >
-              <CheckCircle2 size={17} />
+              {config?.apiKeyConfigured ? (
+                <CheckCircle2 size={17} />
+              ) : (
+                <XCircle size={17} />
+              )}
               {config?.apiKeyConfigured ? "已配置" : "未配置"}
             </span>
             <button
@@ -155,10 +158,14 @@ function SettingsPanel({
               className={
                 config?.usageTokenConfigured
                   ? "configured"
-                  : "configured muted-status"
+                  : "configured missing"
               }
             >
-              <CheckCircle2 size={17} />
+              {config?.usageTokenConfigured ? (
+                <CheckCircle2 size={17} />
+              ) : (
+                <XCircle size={17} />
+              )}
               {config?.usageTokenConfigured ? "已配置" : "未配置"}
             </span>
             <button
@@ -179,9 +186,17 @@ function SettingsPanel({
           {showManualPaste && (
             <>
               <p className="muted">
-                获取：浏览器登录 platform.deepseek.com，按 F12 打开控制台，输入
+                获取：浏览器登录 platform.deepseek.com，按 F12 打开开发者工具，
+                切到「控制台 / Console」标签，在 ❯ 提示符后输入
                 JSON.parse(localStorage.userToken).value
-                回车，复制返回的字符串。
+                回车，右键复制返回的字符串。
+              </p>
+              <p className="muted">
+                若返回 undefined（平台可能调整了存储键名），改输入{" "}
+                {
+                  "Object.entries(localStorage).filter(([k]) => /token/i.test(k))"
+                }
+                ，从结果里找形如 token 的长字符串复制。
               </p>
               <p className="muted">
                 token 会过期，用量查询失败时重新获取一次即可。
