@@ -95,6 +95,7 @@ Two more things worth knowing:
 
 - **V4 Pro is available.** Tracked separately from V4.1 Flash, with its own tokens, cost, and cache stats.
 - **Unclassified tokens are counted anyway.** V4.1 Flash takes image input natively. If the platform reports a token type this project has not classified yet, those tokens are still counted in the total and shown as 其他（未归类） in the charts, rather than being silently dropped.
+- **Models that are not mapped yet get a fallback row.** If the platform reports a model name this project has not mapped yet (for example right after a new model launches), its usage is aggregated into an 其他 row (tokens, cost and request count summed) instead of disappearing. Official mapping for new models still goes through `model_slot()`.
 
 ## What the numbers on screen mean
 
@@ -168,7 +169,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # backend
 
 Coverage targets the things that break silently: usage accounting (the model-name table in `model_slot`, the six token kinds and the `PROMPT_TOKEN` double-count boundary in `token_breakdown`, the additive semantics of `merge_model_slot`), config I/O (missing fields in old configs falling back to defaults, corrupt configs being quarantined and reset, atomic writes leaving no temp file, credential encryption and plaintext migration), login token parsing (context-feature matching, truncated input not crashing), and the frontend's cross-month padding and unit thresholds. Change any of those and run the tests first.
 
-Pushes and pull requests run `.github/workflows/ci.yml`: version consistency, frontend tests, type check and frontend build, plus `cargo fmt --check`, `cargo check`, `cargo clippy -- -D warnings`, and `cargo test`.
+This repository **does not use GitHub Actions**. Run `npm run verify` locally (PowerShell 7+) before pushing: version consistency, frontend tests/lint/build, plus `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test`.
+
+Optional hardening: `git config core.hooksPath scripts/hooks` enables the repo's pre-push hook, which runs `npm run verify` automatically before every `git push` (skip once with `git push --no-verify`).
 
 The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see `Visual Studio Build Tools not found`, install Build Tools 2022 and confirm the C++ workload is selected.
 
@@ -220,6 +223,16 @@ That means almost no `deepseek-v4-pro` calls this month. V4 Pro and V4.1 Flash a
 **Does it hammer the DeepSeek endpoints?**
 Balance and usage are each requested once in three situations: when you open the panel (including bringing it back from the tray), when you refresh manually, and on whatever auto-refresh interval you set (off by default, minimum 1 minute). Auto-refresh pauses while the panel is hidden in the tray, so nothing polls in the background.
 
+### When the usage endpoint stops working
+
+Usage goes through the platform's internal endpoint, which can break when the platform changes. Troubleshoot in this order:
+
+1. **Read the error message.** The panel distinguishes "token invalid/expired" (re-sync needed) from "endpoint unavailable / path may have changed" (retry later); balance errors are unrelated to the usage token.
+2. **Re-sync the token.** Click 网页登录自动同步 in Settings; after logging in, sync usually completes within a few hundred milliseconds. If the login window is still open, clicking the button a few more times triggers another attempt.
+3. **Paste manually as fallback.** Expand 方式二：手动粘贴 token and paste the latest token from your browser.
+4. **Check the diagnostics log.** `%LOCALAPPDATA%\com.deepseek.monitor.windows\logs` records each sync's exit reason and candidate verification outcomes (no credential content ever), so you can see where it stopped: no candidates, verification failed, window closed early, or wait timeout.
+5. **Still broken.** The platform most likely changed the internal route or auth — watch the Releases page for updates. Balance uses the official API and is unaffected.
+
 ## Version history
 
 See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) for the complete history. `v1.0.0` through `v1.1.0` were published by [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows); this repository took over from `v1.2.1`.
@@ -232,6 +245,8 @@ See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) 
 - Token verification probes the current month (UTC+8) and the previous month instead of a fixed historical month, so platform-side archiving of old data cannot break verification.
 - Added non-sensitive diagnostics to the sync logs (watcher exit reasons, candidate verification outcomes — no credential content ever logged).
 - Dashboard refreshes now carry a request guard: a slow stale response no longer overwrites newer data when manual refresh, auto-refresh and tray-restore overlap.
+- Unmapped model names are aggregated into an 其他 row (tokens/cost/requests summed), so usage is not "in the daily total but missing from the rows" right after a new model launches.
+- The README gains a "when the usage endpoint stops working" walkthrough: error classes, re-sync, manual paste, diagnostics log location.
 - `lib.rs` split from 616 to 82 lines (`commands.rs`, `tray.rs`, `usage_watcher.rs`) so command permissions can be audited in one place.
 - Settings state and actions moved to `settings-state.ts` (the component is view-only); the config write lock now fails fast on re-entrancy instead of deadlocking.
 - Repo-wide Prettier check (`npm run format` / verify gate), fixing Windows line-ending false positives.

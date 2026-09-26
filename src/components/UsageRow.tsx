@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Zap } from "lucide-react";
+import { Brain, Shapes, Zap } from "lucide-react";
 import { fmtInt, fmtMoney, fmtTokensShort } from "../format";
 import type { LoadState, ModelName, UsageModel } from "../types";
 
@@ -17,8 +17,10 @@ function UsageRow({
   onClick: () => void;
 }) {
   const isFlash = modelKey === "flash";
+  const isOther = modelKey === "other";
+  const tint = isFlash ? "flash" : isOther ? "other" : "pro";
   // 显示名优先取后端 model_slot 的 name，避免前后端双源漂移
-  const name = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
+  const name = data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
   const tokensText = data
     ? `${fmtInt(data.totalTokens)} Tokens`
     : state === "loading"
@@ -39,8 +41,14 @@ function UsageRow({
 
   return (
     <button className="card usage-row" onClick={onClick}>
-      <div className={`model-badge ${isFlash ? "flash" : "pro"}`}>
-        {isFlash ? <Zap size={27} fill="currentColor" /> : <Brain size={25} />}
+      <div className={`model-badge ${tint}`}>
+        {isFlash ? (
+          <Zap size={27} fill="currentColor" />
+        ) : isOther ? (
+          <Shapes size={25} />
+        ) : (
+          <Brain size={25} />
+        )}
       </div>
       <div className="usage-main">
         <h2>{name}</h2>
@@ -48,13 +56,15 @@ function UsageRow({
           <span>{tokensText}</span>
           <div className="progress-track">
             <i
-              className={isFlash ? "flash-fill" : "pro-fill"}
+              className={
+                isFlash ? "flash-fill" : isOther ? "other-fill" : "pro-fill"
+              }
               style={{ width }}
             />
           </div>
         </div>
         {data && data.cacheHitTokens + data.cacheMissTokens > 0 && (
-          <span className={`cache-hit-rate ${isFlash ? "flash" : "pro"}`}>
+          <span className={`cache-hit-rate ${tint}`}>
             缓存命中{" "}
             {(
               (data.cacheHitTokens /

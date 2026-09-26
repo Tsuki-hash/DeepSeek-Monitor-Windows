@@ -34,7 +34,13 @@ function DashboardPanel({
   const { theme, toggleTheme } = useTheme();
   const flash = usage?.models.find((item) => item.key === "flash") ?? null;
   const pro = usage?.models.find((item) => item.key === "pro") ?? null;
-  const maxTokens = Math.max(flash?.totalTokens ?? 0, pro?.totalTokens ?? 0, 1);
+  const other = usage?.models.find((item) => item.key === "other") ?? null;
+  const maxTokens = Math.max(
+    flash?.totalTokens ?? 0,
+    pro?.totalTokens ?? 0,
+    other?.totalTokens ?? 0,
+    1,
+  );
   const today = usage?.days.find((day) => day.date === todayStr()) ?? null;
   const todayCost = usageState === "ok" && today ? today.totalCost : null;
   const monthCost = usageState === "ok" && usage ? usage.monthCost : null;
@@ -92,6 +98,15 @@ function DashboardPanel({
           state={usageState}
           onClick={() => onDetail("pro")}
         />
+        {other && (
+          <UsageRow
+            modelKey="other"
+            data={other}
+            maxTokens={maxTokens}
+            state={usageState}
+            onClick={() => onDetail("other")}
+          />
+        )}
       </div>
 
       <UsageChart usage={usage} state={usageState} error={usageError} />

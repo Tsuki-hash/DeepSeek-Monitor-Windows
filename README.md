@@ -95,6 +95,7 @@ DeepSeek 在 2026-09-10 上线了 V4.1 Flash，模型名从 `deepseek-v4-flash` 
 
 - **V4 Pro 正常提供。** 与 V4.1 Flash 分开统计，可独立查看 Token、费用与缓存明细。
 - **未归类的 Token 有兜底统计。** V4.1 Flash 原生支持图片输入，如果平台返回了本项目尚未分类的 token 类型，这些量会被计入总量，并在图表里以「其他（未归类）」单独显示，而不是静默丢掉。
+- **未接入的模型有兜底展示。** 平台返回了本项目尚未接入的模型名时（例如后续新模型上线初期），其用量会聚合为「其他」一行展示（Token、费用、请求数求和），不会静默丢失；新模型正式接入仍以 `model_slot()` 的映射为准。
 
 ## 界面上的数字分别是什么
 
@@ -172,6 +173,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
 
 本仓库**不再启用 GitHub Actions**。推送前请在本地跑一次 `npm run verify`（PowerShell 7+）：依次执行版本一致性、前端测试/lint/构建，以及 `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo test`。
 
+可选加固：`git config core.hooksPath scripts/hooks` 启用仓库自带的 pre-push 钩子，`git push` 前自动跑一次 `npm run verify`（单次跳过用 `git push --no-verify`）。
+
 安装包产物位于 `src-tauri/target/release/bundle/nsis/`。若报 `Visual Studio Build Tools not found`，请安装 Build Tools 2022 并确认勾选了 C++ 组件。
 
 ### 代码结构
@@ -225,6 +228,16 @@ DeepSeek-Monitor-Windows/
 **会不会频繁请求 DeepSeek 的接口？**
 余额和用量在三种时机各请求一次：打开面板（含从托盘唤出）、手动刷新、以及你设定的自动刷新周期（默认关闭，开启后最短 1 分钟）。面板收进托盘后自动刷新会暂停，不会在后台轮询。
 
+### 接口失效排查步骤
+
+用量走的是平台内部接口，平台侧调整时可能临时失效。按顺序排查：
+
+1. **看报错文案。** 面板会区分「Token 无效 / 过期」（需重新同步）与「接口暂不可用 / 路径可能变更」（稍后重试）；余额报错与用量 Token 无关。
+2. **重新同步 Token。** 设置页点「网页登录自动同步」，登录完成后通常数百毫秒内自动填入；若登录窗口还开着，可多点几次按钮促发刷新。
+3. **手动粘贴兜底。** 展开「方式二：手动粘贴 token」，按提示从浏览器取最新 token 粘贴保存。
+4. **查诊断日志。** `%LOCALAPPDATA%\com.deepseek.monitor.windows\logs` 记录了每次同步的退出原因与候选校验结果（不含任何凭据内容），可确认卡在哪一步：候选为空、校验未通过、窗口提前关闭或等待超时。
+5. **仍无效。** 多半是平台调整了内部接口的路由或鉴权，留意本仓库 Releases 页更新；余额走官方接口，不受影响。
+
 ## 版本历史
 
 完整发布记录见 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases)。`v1.0.0` – `v1.1.0` 由 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) 发布，本仓库自 `v1.2.1` 起接手维护。
@@ -239,6 +252,8 @@ DeepSeek-Monitor-Windows/
 - Token 校验试调月改为东八区当前月 + 上月，不再固定用历史月份，避免平台归档旧数据后校验恒失效。
 - 新增同步链路诊断日志（watcher 退出原因、候选校验结果，不含任何凭据内容），「点同步没反应」类问题可查日志定位。
 - 主面板刷新加请求守卫：手动刷新 / 自动刷新 / 托盘唤出并发时，慢的旧响应不再覆盖新数据。
+- 未接入的模型名聚合为「其他」行展示（Token / 费用 / 请求数求和），新模型上线初期用量不再「合计对、明细缺」。
+- README 增加「接口失效排查步骤」：报错分级、重新同步、手动粘贴、诊断日志位置一次讲清。
 
 **工程**
 

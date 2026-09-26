@@ -51,6 +51,7 @@ function StackedBarChart({
             >
               {hoveredIdx === idx && point.total > 0 && (
                 <div
+                  id={`bar-tooltip-${variant}-${idx}`}
                   className={`bar-tooltip${
                     idx <= 1
                       ? " align-left"
@@ -102,6 +103,11 @@ function StackedBarChart({
                   role="img"
                   tabIndex={0}
                   aria-label={label}
+                  aria-describedby={
+                    hoveredIdx === idx
+                      ? `bar-tooltip-${variant}-${idx}`
+                      : undefined
+                  }
                   style={{
                     height: `${point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
                   }}

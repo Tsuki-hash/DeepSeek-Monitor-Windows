@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Zap, X } from "lucide-react";
+import { Brain, Shapes, Zap, X } from "lucide-react";
 import {
   chartPointFromDay,
   fmtInt,
@@ -25,16 +25,17 @@ function ModelDetailPanel({
   onBack: () => void;
 }) {
   const isFlash = model === "flash";
+  const isOther = model === "other";
   const data = usage?.models.find((item) => item.key === model) ?? null;
   // 显示名以后端 model_slot 为准，避免前后端双源漂移
-  const title = data?.name ?? (isFlash ? "V4.1 Flash" : "V4 Pro");
-  const tintClass = isFlash ? "flash" : "pro";
+  const title = data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
+  const tintClass = isFlash ? "flash" : isOther ? "other" : "pro";
   const cost = data ? fmtMoney(data.cost) : "—";
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
 
   const days = recentUsageDays(usage?.days ?? []);
   const points = days.map((day) =>
-    chartPointFromDay(day, isFlash ? "flash" : "pro"),
+    chartPointFromDay(day, isFlash ? "flash" : isOther ? "other" : "pro"),
   );
   const hasOther = points.some((point) => point.other > 0);
   const rangeText =
@@ -55,6 +56,8 @@ function ModelDetailPanel({
         <div className={`model-badge large ${tintClass}`}>
           {isFlash ? (
             <Zap size={34} fill="currentColor" />
+          ) : isOther ? (
+            <Shapes size={31} />
           ) : (
             <Brain size={33} />
           )}

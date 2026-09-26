@@ -7,6 +7,7 @@
   --brand-light: #6b85ff;
   --flash: #4091ff;
   --pro: #da38f0;
+  --other: #94a7c4;
   --orange: #ff9c2b;
   --skin-accent: #e0a838;
   --panel-bg: rgba(105, 86, 38, 0.82);
@@ -304,6 +305,10 @@ button {
   color: #c98bff;
 }
 
+.cache-hit-rate.other {
+  color: var(--other);
+}
+
 .model-badge {
   display: grid;
   place-items: center;
@@ -326,6 +331,11 @@ button {
 .model-badge.pro {
   background: rgba(218, 56, 240, 0.16);
   color: var(--pro);
+}
+
+.model-badge.other {
+  background: rgba(148, 167, 196, 0.18);
+  color: var(--other);
 }
 
 .usage-main {
@@ -378,6 +388,10 @@ button {
 
 .pro-fill {
   background: linear-gradient(90deg, #d93ff2, #7463d7);
+}
+
+.other-fill {
+  background: linear-gradient(90deg, #7f92b3, #b4c3d9);
 }
 
 .usage-price {
@@ -856,6 +870,10 @@ button:disabled {
   color: var(--pro);
 }
 
+.other {
+  color: var(--other);
+}
+
 .detail-chart {
   flex: 1;
   min-height: 0;
@@ -1152,6 +1170,7 @@ button:disabled {
   --brand-light: #4d84ff;
   --flash: #2d7ff5;
   --pro: #c02fde;
+  --other: #5b7290;
   --orange: #ef8400;
   --skin-accent: #2d6cf6;
 }
@@ -1222,11 +1241,19 @@ button:disabled {
   color: #9333ea;
 }
 
+[data-theme="light"] .cache-hit-rate.other {
+  color: #51657f;
+}
+
 [data-theme="light"] .model-badge.flash {
   background: rgba(45, 127, 245, 0.18);
 }
 [data-theme="light"] .model-badge.pro {
   background: rgba(192, 47, 222, 0.18);
+}
+
+[data-theme="light"] .model-badge.other {
+  background: rgba(91, 114, 144, 0.18);
 }
 
 [data-theme="light"] .progress-track {

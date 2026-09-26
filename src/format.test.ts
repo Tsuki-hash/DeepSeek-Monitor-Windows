@@ -268,3 +268,34 @@ test("chartPointFromDay：单模型不含未识别模型差额", () => {
   const pro = chartPointFromDay(sample, "pro");
   assert.equal(pro.total, 999);
 });
+
+test("chartPointFromDay：other 档只含未接入模型量（合计 − flash − pro）", () => {
+  const sample: UsageDay = {
+    ...emptyUsageDay("2026-09-11"),
+    flashTokens: 100,
+    flashCacheHit: 60,
+    flashCacheMiss: 40,
+    proTokens: 20,
+    proResponse: 20,
+    // 合计 150：flash 100 + pro 20 → 未接入模型 30，无分段明细
+    totalTokens: 150,
+  };
+  const point = chartPointFromDay(sample, "other");
+  assert.equal(point.hit, 0);
+  assert.equal(point.miss, 0);
+  assert.equal(point.response, 0);
+  assert.equal(point.other, 30);
+  assert.equal(point.total, 30);
+});
+
+test("chartPointFromDay：other 档在合计小于已知模型时夹到 0", () => {
+  // 防御：接口口径异常时不应出现负数柱高
+  const sample: UsageDay = {
+    ...emptyUsageDay("2026-09-11"),
+    flashTokens: 100,
+    totalTokens: 50,
+  };
+  const point = chartPointFromDay(sample, "other");
+  assert.equal(point.other, 0);
+  assert.equal(point.total, 0);
+});

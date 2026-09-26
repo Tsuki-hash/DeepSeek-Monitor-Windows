@@ -126,7 +126,7 @@ export const nextLoadStateAfterError = (
   return message.includes("未配置") ? "nokey" : "error";
 };
 
-export type ChartScope = "all" | "flash" | "pro";
+export type ChartScope = "all" | "flash" | "pro" | "other";
 
 export type ChartPoint = {
   date: string;
@@ -143,6 +143,8 @@ export type ChartPoint = {
  * `scope === "all"` 时合计优先取 `day.totalTokens`（后端覆盖含未识别模型），
  * 与已知分段之和的差额并入 other，避免新模型名出现时按日图静默丢量。
  * 单模型（flash/pro）没有独立的 total 字段，仍按分段求和。
+ * `scope === "other"` 是未接入模型的兜底档：平台不给分段明细，
+ * 按日量 = 当日合计 − flash − pro，柱子只有一段。
  */
 export const chartPointFromDay = (
   day: UsageDay,
@@ -153,25 +155,33 @@ export const chartPointFromDay = (
       ? day.flashCacheHit
       : scope === "pro"
         ? day.proCacheHit
-        : day.flashCacheHit + day.proCacheHit;
+        : scope === "all"
+          ? day.flashCacheHit + day.proCacheHit
+          : 0;
   const miss =
     scope === "flash"
       ? day.flashCacheMiss
       : scope === "pro"
         ? day.proCacheMiss
-        : day.flashCacheMiss + day.proCacheMiss;
+        : scope === "all"
+          ? day.flashCacheMiss + day.proCacheMiss
+          : 0;
   const response =
     scope === "flash"
       ? day.flashResponse
       : scope === "pro"
         ? day.proResponse
-        : day.flashResponse + day.proResponse;
+        : scope === "all"
+          ? day.flashResponse + day.proResponse
+          : 0;
   const knownOther =
     scope === "flash"
       ? day.flashOtherTokens
       : scope === "pro"
         ? day.proOtherTokens
-        : day.flashOtherTokens + day.proOtherTokens;
+        : scope === "all"
+          ? day.flashOtherTokens + day.proOtherTokens
+          : Math.max(0, day.totalTokens - day.flashTokens - day.proTokens);
   const segmented = hit + miss + response + knownOther;
   if (scope !== "all") {
     return {

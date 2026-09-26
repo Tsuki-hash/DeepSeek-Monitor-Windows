@@ -1,7 +1,7 @@
 import type { UsageDay } from "./format";
 
 export type ViewName = "dashboard" | "settings" | "detail";
-export type ModelName = "flash" | "pro";
+export type ModelName = "flash" | "pro" | "other";
 export type AppConfig = {
   apiKeyConfigured: boolean;
   apiKeyPreview: string | null;

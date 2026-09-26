@@ -1,0 +1,6 @@
+#!/bin/sh
+# 推送前跑本地门禁（与「不恢复远程 CI」决策配套，见 docs/DECISIONS.md）。
+# 启用：git config core.hooksPath scripts/hooks
+# 单次跳过：git push --no-verify
+echo "==> pre-push: npm run verify（跳过本次请用 --no-verify）"
+exec npm run verify

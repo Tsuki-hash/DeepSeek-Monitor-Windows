@@ -187,35 +187,51 @@ pub fn build_usage_result(amount: &AmountResp, cost: &CostResp) -> UsageResult {
     // 它们其实是同一个模型，必须累加，否则前端只取第一个会漏掉另一部分用量。
     let mut flash_sum: Option<UsageModelSummary> = None;
     let mut pro_sum: Option<UsageModelSummary> = None;
+    // 未知模型（如后续上线的 V4.1 Pro）聚合为「其他」兜底行，避免新模型名
+    // 接入前其用量「日合计有、模型行无」地静默消失。正式接入仍以 model_slot 为准。
+    let mut other_sum: Option<UsageModelSummary> = None;
     for model_usage in &amount.data.biz_data.total {
-        let Some((slot, display)) = model_slot(&model_usage.model) else {
-            log::warn!("未知模型 {}，未计入模型列表", model_usage.model);
-            continue;
-        };
         let breakdown = token_breakdown(&model_usage.usage);
         let cost = cost_for_model(&model_usage.model);
-        if slot == FLASH_SLOT {
-            flash_sum = Some(merge_model_slot(
-                flash_sum.take(),
-                slot,
-                display,
-                &breakdown,
-                cost,
-            ));
-        } else {
-            pro_sum = Some(merge_model_slot(
-                pro_sum.take(),
-                slot,
-                display,
-                &breakdown,
-                cost,
-            ));
+        match model_slot(&model_usage.model) {
+            Some((slot, display)) if slot == FLASH_SLOT => {
+                flash_sum = Some(merge_model_slot(
+                    flash_sum.take(),
+                    slot,
+                    display,
+                    &breakdown,
+                    cost,
+                ));
+            }
+            Some((slot, display)) => {
+                pro_sum = Some(merge_model_slot(
+                    pro_sum.take(),
+                    slot,
+                    display,
+                    &breakdown,
+                    cost,
+                ));
+            }
+            None => {
+                log::warn!("未知模型 {}，已聚合进「其他」行", model_usage.model);
+                other_sum = Some(merge_model_slot(
+                    other_sum.take(),
+                    "other",
+                    "其他",
+                    &breakdown,
+                    cost,
+                ));
+            }
         }
     }
 
     let mut models = Vec::new();
     models.extend(flash_sum);
     models.extend(pro_sum);
+    // 本月没有未知模型时不出「其他」行，避免常态下多一行空白
+    if let Some(other) = other_sum.filter(|sum| sum.total_tokens > 0 || sum.cost != 0.0) {
+        models.push(other);
+    }
 
     let mut cost_by_date: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     if let Some(item) = cost_total {
@@ -472,7 +488,52 @@ mod tests {
     }
 
     #[test]
-    fn 用量聚合_未知模型计入日total但不进模型行() {
+    fn 用量聚合_未知模型聚合为其他行() {
+        let amount_json = r#"{
+            "data": {
+                "biz_data": {
+                    "total": [
+                        {
+                            "model": "deepseek-mystery",
+                            "usage": [
+                                {"type":"PROMPT_CACHE_HIT_TOKEN","amount":"5.0"},
+                                {"type":"RESPONSE_TOKEN","amount":"5.0"}
+                            ]
+                        }
+                    ],
+                    "days": [
+                        {
+                            "date": "2026-09-02",
+                            "data": [
+                                {
+                                    "model": "deepseek-mystery",
+                                    "usage": [
+                                        {"type":"PROMPT_CACHE_HIT_TOKEN","amount":"5.0"},
+                                        {"type":"RESPONSE_TOKEN","amount":"5.0"}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let cost_json = r#"{"data":{"biz_data":[]}}"#;
+        let amount: AmountResp = serde_json::from_str(amount_json).unwrap();
+        let cost: CostResp = serde_json::from_str(cost_json).unwrap();
+        let result = build_usage_result(&amount, &cost);
+        // 未知模型聚合为「其他」兜底行，而不是静默丢失
+        assert_eq!(result.models.len(), 1);
+        assert_eq!(result.models[0].key, "other");
+        assert_eq!(result.models[0].name, "其他");
+        assert_eq!(result.models[0].total_tokens, 10);
+        assert_eq!(result.days[0].total_tokens, 10);
+    }
+
+    #[test]
+    fn 用量聚合_仅在days中出现的未知模型_计入日total但不出行() {
+        // 边界口径：模型行一律来自月度 total；只在 days 出现的模型不生成
+        // 「其他」行（其 token 仍计入当日合计）。记录该边界，改动须是刻意的。
         let amount_json = r#"{
             "data": {
                 "biz_data": {
@@ -500,5 +561,27 @@ mod tests {
         let result = build_usage_result(&amount, &cost);
         assert!(result.models.is_empty());
         assert_eq!(result.days[0].total_tokens, 10);
+    }
+
+    #[test]
+    fn 用量聚合_多个未知模型累加进其他行() {
+        let amount_json = r#"{
+            "data": {
+                "biz_data": {
+                    "total": [
+                        {"model": "deepseek-mystery-a", "usage": [{"type":"RESPONSE_TOKEN","amount":"10.0"}]},
+                        {"model": "deepseek-mystery-b", "usage": [{"type":"RESPONSE_TOKEN","amount":"6.0"}]}
+                    ],
+                    "days": []
+                }
+            }
+        }"#;
+        let cost_json = r#"{"data":{"biz_data":[]}}"#;
+        let amount: AmountResp = serde_json::from_str(amount_json).unwrap();
+        let cost: CostResp = serde_json::from_str(cost_json).unwrap();
+        let result = build_usage_result(&amount, &cost);
+        assert_eq!(result.models.len(), 1);
+        assert_eq!(result.models[0].key, "other");
+        assert_eq!(result.models[0].total_tokens, 16);
     }
 }
