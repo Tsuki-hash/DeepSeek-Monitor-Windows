@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.2.3"
+version = "1.2.4"
 description = "DeepSeek Monitor Windows desktop app"
 authors = ["Tsuki-hash"]
 license = "MIT"
@@ -34,12 +34,16 @@ base64 = "0.22"
 tokio = { version = "1", features = ["macros"] }
 
 # 凭据加密（M-1）。windows crate 本就是 tauri 的传递依赖（经 tao / webview2-com），
-# 这里提为直接依赖只为拿到 DPAPI（CryptProtectData / CryptUnprotectData），
-# 不新增任何编译单元。仅开 Cryptography 相关 feature，避免拖入整个 Win32 表面。
+# 这里提为直接依赖只为拿到 DPAPI（CryptProtectData / CryptUnprotectData）与
+# 缓存目录变更监听（ReadDirectoryChangesW，见 cache_watch.rs），
+# 不新增任何编译单元。仅开用到的 Win32 面，避免拖入整个表面。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
 ] }
 
 # Tauri 官方推荐的 release 配置：体积与内存占用明显下降，代价是全量构建更慢。

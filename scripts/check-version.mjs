@@ -18,7 +18,9 @@ const readJson = (rel) => JSON.parse(readFileSync(join(root, rel), "utf8"));
 /** 从 Cargo.toml 的 [package] 段里取 version，避免为此引入 TOML 解析依赖 */
 const readCargoVersion = (rel) => {
   const text = readFileSync(join(root, rel), "utf8");
-  const pkg = text.split(/^\[/m).find((section) => section.startsWith("package]"));
+  const pkg = text
+    .split(/^\[/m)
+    .find((section) => section.startsWith("package]"));
   if (!pkg) throw new Error(`${rel} 中找不到 [package] 段`);
   const match = /^\s*version\s*=\s*"([^"]+)"/m.exec(pkg);
   if (!match) throw new Error(`${rel} 的 [package] 段中找不到 version`);
@@ -27,8 +29,14 @@ const readCargoVersion = (rel) => {
 
 const sources = [
   { label: "package.json", value: readJson("package.json").version },
-  { label: "src-tauri/tauri.conf.json", value: readJson("src-tauri/tauri.conf.json").version },
-  { label: "src-tauri/Cargo.toml", value: readCargoVersion("src-tauri/Cargo.toml") },
+  {
+    label: "src-tauri/tauri.conf.json",
+    value: readJson("src-tauri/tauri.conf.json").version,
+  },
+  {
+    label: "src-tauri/Cargo.toml",
+    value: readCargoVersion("src-tauri/Cargo.toml"),
+  },
 ];
 
 const distinct = [...new Set(sources.map((s) => s.value))];

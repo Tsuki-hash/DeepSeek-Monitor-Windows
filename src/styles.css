@@ -152,7 +152,11 @@ button {
 }
 
 .card {
-  background: linear-gradient(180deg, rgba(44, 38, 16, 0.68), rgba(36, 35, 16, 0.62));
+  background: linear-gradient(
+    180deg,
+    rgba(44, 38, 16, 0.68),
+    rgba(36, 35, 16, 0.62)
+  );
   border: 1px solid rgba(255, 255, 255, 0.025);
   border-radius: 12px;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
@@ -609,7 +613,7 @@ button {
 .key-row input {
   width: 100%;
   height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
   padding: 0 10px;
   background: rgba(24, 23, 19, 0.78);
@@ -665,7 +669,6 @@ button:disabled {
   align-items: center;
   gap: 8px;
 }
-
 
 .primary {
   border: 0;
@@ -860,7 +863,11 @@ button:disabled {
   flex-direction: column;
   border-radius: 18px;
   padding: 14px 18px 16px;
-  background: linear-gradient(180deg, rgba(26, 50, 21, 0.58), rgba(34, 41, 17, 0.62));
+  background: linear-gradient(
+    180deg,
+    rgba(26, 50, 21, 0.58),
+    rgba(34, 41, 17, 0.62)
+  );
 }
 
 .detail-chart-head {
@@ -935,17 +942,25 @@ button:disabled {
 
 .detail-bar-stacked .seg {
   width: 100%;
-  flex-basis: 0;     /* 纯按 flex-grow(真实 token 数)比例分配高度 */
-  flex-shrink: 1;    /* 空间不足时按比例收缩，避免 min-height 累加溢出 */
-  min-height: 3px;   /* 保证非零小段始终可见 */
+  flex-basis: 0; /* 纯按 flex-grow(真实 token 数)比例分配高度 */
+  flex-shrink: 1; /* 空间不足时按比例收缩，避免 min-height 累加溢出 */
+  min-height: 3px; /* 保证非零小段始终可见 */
 }
 
-.detail-bar-stacked .seg.hit    { background: #34d399; }
-.detail-bar-stacked .seg.miss   { background: var(--orange); }
-.detail-bar-stacked .seg.response { background: #a78bfa; }
-.detail-bar-stacked .seg.other    { background: rgba(var(--fg), 0.34); }
-.detail-bar-stacked .seg.empty  {
-  flex-grow: 1;      /* 空数据占位段填满 MIN_BAR 高度的柱子 */
+.detail-bar-stacked .seg.hit {
+  background: #34d399;
+}
+.detail-bar-stacked .seg.miss {
+  background: var(--orange);
+}
+.detail-bar-stacked .seg.response {
+  background: #a78bfa;
+}
+.detail-bar-stacked .seg.other {
+  background: rgba(var(--fg), 0.34);
+}
+.detail-bar-stacked .seg.empty {
+  flex-grow: 1; /* 空数据占位段填满 MIN_BAR 高度的柱子 */
   min-height: 0;
   background: rgba(var(--fg), 0.12);
   border-radius: 8px;
@@ -1109,10 +1124,18 @@ button:disabled {
   border-radius: 4px;
 }
 
-.chart-legend-item .dot.hit    { background: #34d399; }
-.chart-legend-item .dot.miss   { background: var(--orange); }
-.chart-legend-item .dot.response { background: #a78bfa; }
-.chart-legend-item .dot.other    { background: rgba(var(--fg), 0.34); }
+.chart-legend-item .dot.hit {
+  background: #34d399;
+}
+.chart-legend-item .dot.miss {
+  background: var(--orange);
+}
+.chart-legend-item .dot.response {
+  background: #a78bfa;
+}
+.chart-legend-item .dot.other {
+  background: rgba(var(--fg), 0.34);
+}
 
 .detail-bar-column em {
   color: var(--text-faint);
@@ -1137,15 +1160,25 @@ button:disabled {
 [data-theme="light"] .settings-panel {
   border-color: rgba(255, 255, 255, 0.55);
   background:
-    linear-gradient(150deg, rgba(150, 205, 236, 0.85), rgba(172, 224, 206, 0.82)),
+    linear-gradient(
+      150deg,
+      rgba(150, 205, 236, 0.85),
+      rgba(172, 224, 206, 0.82)
+    ),
     rgba(216, 233, 239, 0.92);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.6);
 }
 
 [data-theme="light"] .card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.42));
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.55),
+    rgba(255, 255, 255, 0.42)
+  );
   border-color: rgba(255, 255, 255, 0.6);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.7), 0 2px 8px rgba(40, 80, 120, 0.08);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.7),
+    0 2px 8px rgba(40, 80, 120, 0.08);
 }
 
 [data-theme="light"] .header-actions button,
@@ -1215,7 +1248,11 @@ button:disabled {
 }
 
 [data-theme="light"] .detail-chart {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.34));
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.45),
+    rgba(255, 255, 255, 0.34)
+  );
 }
 
 [data-theme="light"] .bar-tooltip {

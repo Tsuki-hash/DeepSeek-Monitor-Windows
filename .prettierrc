@@ -1,0 +1,4 @@
+# endOfLine: auto —— 保留各文件现有行尾。Windows 下 autocrlf 检出的文件是 CRLF，
+# prettier 默认的 lf 会把「行尾」误判成「未格式化」，让门禁在行尾上空转；
+# 入库内容由 git 统一规范化（autocrlf），本配置只关心真实的排版差异。
+endOfLine: auto

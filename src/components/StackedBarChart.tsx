@@ -45,11 +45,18 @@ function StackedBarChart({
             `命中 ${fmtInt(point.hit)}，未命中 ${fmtInt(point.miss)}，输出 ${fmtInt(point.response)}` +
             (point.other > 0 ? `，其他 ${fmtInt(point.other)}` : "");
           return (
-            <div className={isSummary ? "bar-column" : "detail-bar-column"} key={point.date}>
+            <div
+              className={isSummary ? "bar-column" : "detail-bar-column"}
+              key={point.date}
+            >
               {hoveredIdx === idx && point.total > 0 && (
                 <div
                   className={`bar-tooltip${
-                    idx <= 1 ? " align-left" : idx >= points.length - 2 ? " align-right" : ""
+                    idx <= 1
+                      ? " align-left"
+                      : idx >= points.length - 2
+                        ? " align-right"
+                        : ""
                   }`}
                 >
                   <div className="bar-tooltip-head">
@@ -57,20 +64,24 @@ function StackedBarChart({
                     <strong>{fmtInt(point.total)} tokens</strong>
                   </div>
                   <span className="bar-tooltip-row">
-                    <i className="dot hit" />输入（命中缓存）
+                    <i className="dot hit" />
+                    输入（命中缓存）
                     <strong>{fmtInt(point.hit)} tokens</strong>
                   </span>
                   <span className="bar-tooltip-row">
-                    <i className="dot miss" />输入（未命中缓存）
+                    <i className="dot miss" />
+                    输入（未命中缓存）
                     <strong>{fmtInt(point.miss)} tokens</strong>
                   </span>
                   <span className="bar-tooltip-row">
-                    <i className="dot response" />输出
+                    <i className="dot response" />
+                    输出
                     <strong>{fmtInt(point.response)} tokens</strong>
                   </span>
                   {point.other > 0 && (
                     <span className="bar-tooltip-row">
-                      <i className="dot other" />其他（含未识别模型）
+                      <i className="dot other" />
+                      其他（含未识别模型）
                       <strong>{fmtInt(point.other)} tokens</strong>
                     </span>
                   )}
@@ -81,7 +92,9 @@ function StackedBarChart({
                   {point.total > 0 ? fmtTokensShort(point.total) : "0"}
                 </span>
               ) : (
-                <span>{point.total > 0 ? fmtTokensShort(point.total) : ""}</span>
+                <span>
+                  {point.total > 0 ? fmtTokensShort(point.total) : ""}
+                </span>
               )}
               <div className={isSummary ? "bar-slot" : "detail-bar-slot"}>
                 <div
@@ -104,12 +117,30 @@ function StackedBarChart({
                 >
                   {point.total > 0 ? (
                     <>
-                      {point.hit > 0 && <i className="seg hit" style={{ flexGrow: point.hit }} />}
-                      {point.miss > 0 && <i className="seg miss" style={{ flexGrow: point.miss }} />}
-                      {point.response > 0 && (
-                        <i className="seg response" style={{ flexGrow: point.response }} />
+                      {point.hit > 0 && (
+                        <i
+                          className="seg hit"
+                          style={{ flexGrow: point.hit }}
+                        />
                       )}
-                      {point.other > 0 && <i className="seg other" style={{ flexGrow: point.other }} />}
+                      {point.miss > 0 && (
+                        <i
+                          className="seg miss"
+                          style={{ flexGrow: point.miss }}
+                        />
+                      )}
+                      {point.response > 0 && (
+                        <i
+                          className="seg response"
+                          style={{ flexGrow: point.response }}
+                        />
+                      )}
+                      {point.other > 0 && (
+                        <i
+                          className="seg other"
+                          style={{ flexGrow: point.other }}
+                        />
+                      )}
                     </>
                   ) : (
                     <i className="seg empty" />
@@ -127,17 +158,21 @@ function StackedBarChart({
       </div>
       <div className="chart-legend-bottom">
         <span className="chart-legend-item">
-          <i className="dot hit" />命中
+          <i className="dot hit" />
+          命中
         </span>
         <span className="chart-legend-item">
-          <i className="dot miss" />未命中
+          <i className="dot miss" />
+          未命中
         </span>
         <span className="chart-legend-item">
-          <i className="dot response" />输出
+          <i className="dot response" />
+          输出
         </span>
         {hasOther && (
           <span className="chart-legend-item">
-            <i className="dot other" />其他
+            <i className="dot other" />
+            其他
           </span>
         )}
       </div>

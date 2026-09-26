@@ -1,0 +1,13 @@
+# 构建产物与生成文件：不参与格式化
+dist/
+node_modules/
+src-tauri/gen/
+src-tauri/target/
+screenshots/
+
+# 中文文档（README / docs）：prettier 会对 CJK 表格加对齐空格、改写强调符号，
+# 对手工维护的文档是纯噪音，不纳入检查
+*.md
+
+# 依赖锁文件由 npm 维护
+package-lock.json

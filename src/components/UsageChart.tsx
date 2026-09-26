@@ -20,7 +20,10 @@ function UsageChart({
   const sumHit = points.reduce((sum, point) => sum + point.hit, 0);
   const sumMiss = points.reduce((sum, point) => sum + point.miss, 0);
   const sumTotal = points.reduce((sum, point) => sum + point.total, 0);
-  const hitRate = sumHit + sumMiss > 0 ? ((sumHit / (sumHit + sumMiss)) * 100).toFixed(0) : "0";
+  const hitRate =
+    sumHit + sumMiss > 0
+      ? ((sumHit / (sumHit + sumMiss)) * 100).toFixed(0)
+      : "0";
   const placeholder =
     state === "loading"
       ? "查询中…"
@@ -49,7 +52,11 @@ function UsageChart({
         </span>
       </div>
       {state === "ok" && points.length > 0 ? (
-        <StackedBarChart points={points} variant="summary" hasOther={hasOther} />
+        <StackedBarChart
+          points={points}
+          variant="summary"
+          hasOther={hasOther}
+        />
       ) : (
         <div className="chart-placeholder">{placeholder}</div>
       )}

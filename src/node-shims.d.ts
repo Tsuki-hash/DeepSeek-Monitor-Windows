@@ -16,7 +16,11 @@ declare module "node:test" {
   export type TestFn = (context: TestContext) => void | Promise<void>;
 
   export function test(name: string, fn: TestFn): Promise<void>;
-  export function test(name: string, options: { skip?: boolean }, fn: TestFn): Promise<void>;
+  export function test(
+    name: string,
+    options: { skip?: boolean },
+    fn: TestFn,
+  ): Promise<void>;
   export function describe(name: string, fn: () => void): void;
   export function it(name: string, fn: TestFn): Promise<void>;
 }

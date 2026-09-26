@@ -28,7 +28,7 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 ### 安装
 
-从 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.2_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
+从 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
 
 运行环境：Windows 10 或 Windows 11，以及 Microsoft Edge WebView2 Runtime（Windows 11 自带，Windows 10 若缺失需单独安装）。
 
@@ -228,6 +228,20 @@ DeepSeek-Monitor-Windows/
 ## 版本历史
 
 完整发布记录见 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases)。`v1.0.0` – `v1.1.0` 由 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) 发布，本仓库自 `v1.2.1` 起接手维护。
+
+### v1.2.4
+
+**同步与性能**
+
+- 登录同步改为监听 WebView2 缓存目录变更（Windows `ReadDirectoryChangesW`）：网页登录落盘后通常数百毫秒内即完成同步（原先最快也要等 1.5 秒的下一轮轮询）；空闲期间不再反复全目录扫描，大缓存目录下 CPU/IO 占用更低。监听失效（如目录被重建）时自动退回原有轮询节奏，不影响可用性。
+- 缓存去重表改为惰性 LRU 淘汰：内容频繁变动的「热文件」不会被优先淘汰，淘汰本身也从整段搬移变为 O(1)，长会话下避免反复重读同一批文件。
+
+**工程**
+
+- 全仓接入 Prettier（`npm run format` / verify 门禁检查），并修复 Windows 行尾导致的检查误报。
+- 新增 7 项单元测试锁定缓存监听与 LRU 淘汰行为（Rust 合计 73 项）。
+
+安装包为 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe`。
 
 ### v1.2.3
 

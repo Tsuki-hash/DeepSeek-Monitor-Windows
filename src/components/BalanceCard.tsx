@@ -25,7 +25,8 @@ function BalanceCard({
         : state === "error"
           ? "查询失败"
           : `${symbol}${balance?.totalBalance ?? "0.00"}`;
-  const statusText = state === "ok" ? (balance?.isAvailable ? "可用" : "余额不足") : "—";
+  const statusText =
+    state === "ok" ? (balance?.isAvailable ? "可用" : "余额不足") : "—";
   const statusOff = state === "ok" && balance != null && !balance.isAvailable;
 
   return (
@@ -40,7 +41,9 @@ function BalanceCard({
           {statusText}
         </div>
       </div>
-      <div className={`balance-amount ${state !== "ok" ? "balance-dim" : ""}`}>{amount}</div>
+      <div className={`balance-amount ${state !== "ok" ? "balance-dim" : ""}`}>
+        {amount}
+      </div>
       {state === "error" && <div className="balance-error">{error}</div>}
       <div className="metric-grid">
         <div className="mini-card">

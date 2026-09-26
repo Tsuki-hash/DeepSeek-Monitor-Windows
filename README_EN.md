@@ -28,7 +28,7 @@ This project combines three things:
 
 ### Install
 
-Download `DeepSeekMonitorWindows_1.2.2_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest). Installing over an older version does not require uninstalling it first.
+Download `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest). Installing over an older version does not require uninstalling it first.
 
 Requirements: Windows 10 or Windows 11, plus the Microsoft Edge WebView2 Runtime (included with Windows 11; install separately on Windows 10 if missing).
 
@@ -223,6 +223,15 @@ Balance and usage are each requested once in three situations: when you open the
 ## Version history
 
 See [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases) for the complete history. `v1.0.0` through `v1.1.0` were published by [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows); this repository took over from `v1.2.1`.
+
+### v1.2.4
+
+- Login sync now watches the WebView2 cache directory for changes (Windows `ReadDirectoryChangesW`): after a web login, sync typically completes within a few hundred milliseconds (previously it waited up to 1.5s for the next poll); idle periods no longer rescan the whole directory, keeping CPU/IO low with large caches. If the watch fails (e.g. the directory is recreated) it falls back to the previous polling rhythm automatically.
+- The cache dedup table now uses lazy LRU eviction: frequently updated "hot" files are no longer evicted first, and eviction is O(1) instead of shifting large slices — fewer repeated reads in long sessions.
+- Repo-wide Prettier check (`npm run format` / verify gate), fixing Windows line-ending false positives.
+- 7 new unit tests covering the cache watch and LRU eviction (73 Rust tests in total).
+
+Installer: `DeepSeekMonitorWindows_1.2.4_x64-setup.exe`.
 
 ### v1.2.3
 

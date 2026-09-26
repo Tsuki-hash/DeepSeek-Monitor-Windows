@@ -54,7 +54,9 @@ test("fmtTokensShort：各档阈值", () => {
 test("fmtTokensShort：输出长度可控（柱顶标签的硬约束）", () => {
   // 356px 宽、7 列布局下每列约 34px，10px 字号最多容得下 6 个字符。
   // 这条断言是柱顶数值不再被 ellipsis 裁掉的护栏。
-  const samples = [0, 999, 1000, 9999, 99999, 999499, 999500, 1e6, 9.9e6, 99999999, 1e8, 9.9e8];
+  const samples = [
+    0, 999, 1000, 9999, 99999, 999499, 999500, 1e6, 9.9e6, 99999999, 1e8, 9.9e8,
+  ];
   for (const value of samples) {
     assert.ok(
       fmtTokensShort(value).length <= 6,
@@ -124,9 +126,18 @@ test("mmdd：三段式日期转月/日，异常输入原样返回", () => {
 });
 
 test("previousMonth：跨年回退", () => {
-  assert.deepEqual(previousMonth(new Date(2026, 8, 11)), { month: 8, year: 2026 });
-  assert.deepEqual(previousMonth(new Date(2026, 0, 15)), { month: 12, year: 2025 });
-  assert.deepEqual(previousMonth(new Date(2026, 11, 31)), { month: 11, year: 2026 });
+  assert.deepEqual(previousMonth(new Date(2026, 8, 11)), {
+    month: 8,
+    year: 2026,
+  });
+  assert.deepEqual(previousMonth(new Date(2026, 0, 15)), {
+    month: 12,
+    year: 2025,
+  });
+  assert.deepEqual(previousMonth(new Date(2026, 11, 31)), {
+    month: 11,
+    year: 2026,
+  });
 });
 
 // ---------- recentUsageDays ----------
@@ -212,7 +223,10 @@ test("chartPointFromDay：all 用 totalTokens 吞掉未识别模型差额", () =
   assert.equal(point.response, 50);
   assert.equal(point.other, 140);
   assert.equal(point.total, 500);
-  assert.equal(point.hit + point.miss + point.response + point.other, point.total);
+  assert.equal(
+    point.hit + point.miss + point.response + point.other,
+    point.total,
+  );
 });
 
 test("chartPointFromDay：all 在 totalTokens 缺失时退回分段和", () => {
@@ -230,8 +244,14 @@ test("chartPointFromDay：all 在 totalTokens 缺失时退回分段和", () => {
 test("nextLoadStateAfterError：silent 保留 ok，否则标 error/nokey", () => {
   assert.equal(nextLoadStateAfterError("ok", true, "网络失败"), "ok");
   assert.equal(nextLoadStateAfterError("ok", false, "网络失败"), "error");
-  assert.equal(nextLoadStateAfterError("loading", true, "未配置用量 Token"), "nokey");
-  assert.equal(nextLoadStateAfterError("error", true, "未配置 API Key"), "nokey");
+  assert.equal(
+    nextLoadStateAfterError("loading", true, "未配置用量 Token"),
+    "nokey",
+  );
+  assert.equal(
+    nextLoadStateAfterError("error", true, "未配置 API Key"),
+    "nokey",
+  );
 });
 
 test("chartPointFromDay：单模型不含未识别模型差额", () => {

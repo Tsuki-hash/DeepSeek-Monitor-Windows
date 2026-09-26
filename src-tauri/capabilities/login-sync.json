@@ -4,10 +4,7 @@
   "description": "加载远程 DeepSeek 登录页的窗口：不授予事件 emit（防止伪造主窗口事件），token 经 usage_token_captured 命令回传（命令侧再校验窗口 label）。",
   "windows": ["login-sync"],
   "remote": {
-    "urls": [
-      "https://platform.deepseek.com",
-      "https://platform.deepseek.com/*"
-    ]
+    "urls": ["https://platform.deepseek.com", "https://platform.deepseek.com/*"]
   },
   "permissions": []
 }

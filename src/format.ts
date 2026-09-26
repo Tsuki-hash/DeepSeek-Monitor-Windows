@@ -46,7 +46,8 @@ export const fmtMoney = (n: number, symbol = "¥") => symbol + n.toFixed(2);
  * 而用量与消费来自平台内部接口，恒为人民币计价。两者口径不同，所以共享同一面板时必须
  * 用余额的币种符号，否则会出现「余额 $xx 而当日消耗 ¥xx」的矛盾显示。
  */
-export const currencySymbol = (currency?: string) => (currency === "USD" ? "$" : "¥");
+export const currencySymbol = (currency?: string) =>
+  currency === "USD" ? "$" : "¥";
 
 /** `2026-09-11` → `9/11`。 */
 export const mmdd = (date: string) => {
@@ -97,7 +98,9 @@ export const emptyUsageDay = (date: string): UsageDay => ({
  */
 export const recentUsageDays = (days: UsageDay[], count = 7): UsageDay[] => {
   const today = todayStr();
-  const source = new Map(days.filter((day) => day.date <= today).map((day) => [day.date, day]));
+  const source = new Map(
+    days.filter((day) => day.date <= today).map((day) => [day.date, day]),
+  );
   const now = new Date();
   return Array.from({ length: count }, (_, index) => {
     const date = dateKey(addDays(now, index - count + 1));
@@ -141,17 +144,44 @@ export type ChartPoint = {
  * 与已知分段之和的差额并入 other，避免新模型名出现时按日图静默丢量。
  * 单模型（flash/pro）没有独立的 total 字段，仍按分段求和。
  */
-export const chartPointFromDay = (day: UsageDay, scope: ChartScope = "all"): ChartPoint => {
-  const hit = scope === "flash" ? day.flashCacheHit : scope === "pro" ? day.proCacheHit : day.flashCacheHit + day.proCacheHit;
+export const chartPointFromDay = (
+  day: UsageDay,
+  scope: ChartScope = "all",
+): ChartPoint => {
+  const hit =
+    scope === "flash"
+      ? day.flashCacheHit
+      : scope === "pro"
+        ? day.proCacheHit
+        : day.flashCacheHit + day.proCacheHit;
   const miss =
-    scope === "flash" ? day.flashCacheMiss : scope === "pro" ? day.proCacheMiss : day.flashCacheMiss + day.proCacheMiss;
+    scope === "flash"
+      ? day.flashCacheMiss
+      : scope === "pro"
+        ? day.proCacheMiss
+        : day.flashCacheMiss + day.proCacheMiss;
   const response =
-    scope === "flash" ? day.flashResponse : scope === "pro" ? day.proResponse : day.flashResponse + day.proResponse;
+    scope === "flash"
+      ? day.flashResponse
+      : scope === "pro"
+        ? day.proResponse
+        : day.flashResponse + day.proResponse;
   const knownOther =
-    scope === "flash" ? day.flashOtherTokens : scope === "pro" ? day.proOtherTokens : day.flashOtherTokens + day.proOtherTokens;
+    scope === "flash"
+      ? day.flashOtherTokens
+      : scope === "pro"
+        ? day.proOtherTokens
+        : day.flashOtherTokens + day.proOtherTokens;
   const segmented = hit + miss + response + knownOther;
   if (scope !== "all") {
-    return { date: day.date, hit, miss, response, other: knownOther, total: segmented };
+    return {
+      date: day.date,
+      hit,
+      miss,
+      response,
+      other: knownOther,
+      total: segmented,
+    };
   }
   const total = Math.max(day.totalTokens, segmented);
   const other = knownOther + (total - segmented);

@@ -26,7 +26,8 @@ function App() {
   const [usage, setUsage] = React.useState<UsageResult | null>(null);
   const [usageState, setUsageState] = React.useState<LoadState>("loading");
   const [usageError, setUsageError] = React.useState("");
-  const [refreshIntervalSeconds, setRefreshIntervalSeconds] = React.useState(60);
+  const [refreshIntervalSeconds, setRefreshIntervalSeconds] =
+    React.useState(60);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = React.useState(false);
 
   // silent=true 表示后台刷新：已有数据时保留旧值，不再把面板打回「查询中…」骨架，

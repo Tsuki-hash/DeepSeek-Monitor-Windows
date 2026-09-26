@@ -1,4 +1,5 @@
 pub mod autostart;
+pub mod cache_watch;
 pub mod config;
 pub mod credentials;
 pub mod deepseek_api;
@@ -306,6 +307,10 @@ pub fn run() {
             // 登录页加载并触发平台 API 请求需要时间，等待后再开始扫缓存
             thread::sleep(Duration::from_secs(3));
             let mut scan = CacheScanState::default();
+            // 缓存目录可能尚未创建（首次登录时 WebView2 还没落盘），每轮空闲时
+            // 检查监听存活、失效就重新拉起；拉起失败自然退回定时轮询
+            let cache_dir = token_sync::webview_cache_dir();
+            let mut change_signal = cache_dir.as_deref().and_then(cache_watch::spawn);
             let mut idle_rounds = 0u32;
             for _ in 0..1200 {
                 // 新一轮同步已开始：本 watcher 作废
@@ -345,11 +350,30 @@ pub fn run() {
                     }
                 }
 
-                // 登录初期 1.5s 快扫；连续空转后放慢到 4s
-                let sleep_ms = if idle_rounds < 20 { 1500 } else { 4000 };
-                thread::sleep(Duration::from_millis(sleep_ms));
+                // 有目录变更 → 去抖后立刻扫（WebView2 落盘后数百毫秒内即可命中）；
+                // 无变更 → 维持 1.5s→4s 的退避节奏兜底轮询，防通知丢失或目录重建
+                let wait_ms = if idle_rounds < 20 { 1500 } else { 4000 };
+                let changed = match change_signal.as_mut() {
+                    Some(signal) if signal.is_alive() => {
+                        signal.wait(Duration::from_millis(wait_ms))
+                    }
+                    _ => {
+                        thread::sleep(Duration::from_millis(wait_ms));
+                        false
+                    }
+                };
+                if !change_signal
+                    .as_ref()
+                    .is_some_and(|signal| signal.is_alive())
+                {
+                    change_signal = cache_dir.as_deref().and_then(cache_watch::spawn);
+                }
+                if changed {
+                    // WebView2 一次页面加载会写一批缓存文件，稍等写入平息再扫
+                    thread::sleep(Duration::from_millis(250));
+                }
             }
-            // 30 分钟超时，若仍未成功则通知前端结束等待
+            // 达到轮次上限（实际多由登录窗口关闭提前退出），若仍未成功则通知前端结束等待
             let captured = app
                 .try_state::<Arc<AtomicBool>>()
                 .map(|flag| flag.load(Ordering::SeqCst))

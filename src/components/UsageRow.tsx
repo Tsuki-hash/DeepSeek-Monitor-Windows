@@ -29,8 +29,13 @@ function UsageRow({
           ? "用量不可用"
           : "—";
   const cost = data ? fmtMoney(data.cost) : "—";
-  const ratio = data && data.cost > 0 ? `${fmtTokensShort(data.totalTokens / data.cost)} T/¥` : "—";
-  const width = data ? `${Math.max(2, (data.totalTokens / maxTokens) * 100)}%` : "0%";
+  const ratio =
+    data && data.cost > 0
+      ? `${fmtTokensShort(data.totalTokens / data.cost)} T/¥`
+      : "—";
+  const width = data
+    ? `${Math.max(2, (data.totalTokens / maxTokens) * 100)}%`
+    : "0%";
 
   return (
     <button className="card usage-row" onClick={onClick}>
@@ -42,13 +47,21 @@ function UsageRow({
         <div className="token-line">
           <span>{tokensText}</span>
           <div className="progress-track">
-            <i className={isFlash ? "flash-fill" : "pro-fill"} style={{ width }} />
+            <i
+              className={isFlash ? "flash-fill" : "pro-fill"}
+              style={{ width }}
+            />
           </div>
         </div>
         {data && data.cacheHitTokens + data.cacheMissTokens > 0 && (
           <span className={`cache-hit-rate ${isFlash ? "flash" : "pro"}`}>
             缓存命中{" "}
-            {((data.cacheHitTokens / (data.cacheHitTokens + data.cacheMissTokens)) * 100).toFixed(0)}%
+            {(
+              (data.cacheHitTokens /
+                (data.cacheHitTokens + data.cacheMissTokens)) *
+              100
+            ).toFixed(0)}
+            %
           </span>
         )}
       </div>

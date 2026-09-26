@@ -7,7 +7,7 @@
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -82,40 +82,98 @@ pub fn extract_user_api_token(text: &str) -> Option<String> {
 /// 轮询缓存目录的去重状态：path -> (文件大小, 修改时间)。
 /// watcher 周期扫一次，而缓存目录里绝大多数文件在两次轮询之间并没有变化。
 /// 只比对元数据即可判断「读过且没变」，避免反复整读。
+///
+/// 淘汰采用惰性 LRU：`seen` 每个表项带一个递增的代际号，`order` 只是触碰历史
+/// 的排队记录，出队时代际对不上说明同一路径后来又被触碰过，这条记录已过期、
+/// 直接跳过。好处有二：出队均摊 O(1)（没有 `Vec::remove(0)` 的整段搬移）；
+/// 内容频繁变动的热文件每次重读都会挪到队尾——FIFO 恰好相反，最先入表的
+/// 热文件会最先被淘汰，逼着 watcher 反复重读最活跃的那批文件。
 #[derive(Default)]
 pub struct CacheScanState {
-    seen: HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>,
-    /// 插入顺序，用于超限时淘汰最旧一批，而不是整表清空导致全部重读。
-    order: Vec<PathBuf>,
+    seen: HashMap<PathBuf, (Stamp, u64)>,
+    order: VecDeque<(PathBuf, u64)>,
+    next_generation: u64,
 }
 
-/// `seen` 表项上限。超过后淘汰最旧的 1/4，保留近期文件的去重信息。
+/// 表项内容指纹：文件大小 + 修改时间。
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+/// `seen` 表项上限。超过后按 LRU 淘汰到 3/4，保留近期文件的去重信息。
 const MAX_SEEN_ENTRIES: usize = 50_000;
 
-fn mark_seen(
-    scan: &mut CacheScanState,
-    path: PathBuf,
-    stamp: (u64, Option<std::time::SystemTime>),
-) {
-    if !scan.seen.contains_key(&path) {
-        scan.order.push(path.clone());
-    }
-    scan.seen.insert(path, stamp);
-}
+/// `order` 相对 `seen` 的膨胀上限。超出说明积累了大量过期排队记录（同一路径
+/// 被反复触碰），重建一次队列清掉，防止极端热点文件把队列撑得比表还大。
+const ORDER_BLOAT_FACTOR: usize = 2;
+const ORDER_BLOAT_SLACK: usize = 64;
 
-fn evict_oldest_quarter(scan: &mut CacheScanState) {
-    let drop = scan.order.len() / 4;
-    for _ in 0..drop {
-        if let Some(old) = scan.order.first().cloned() {
-            scan.order.remove(0);
-            scan.seen.remove(&old);
-        } else {
-            break;
+/// 记录「该路径本轮已处理过」。已有表项且内容指纹变化（刚被重读）视为一次
+/// LRU 触碰，换新代际号挪到队尾。
+fn mark_seen(scan: &mut CacheScanState, path: PathBuf, stamp: Stamp) {
+    match scan.seen.get_mut(&path) {
+        Some(entry) => {
+            if entry.0 != stamp {
+                scan.next_generation += 1;
+                let generation = scan.next_generation;
+                entry.1 = generation;
+                entry.0 = stamp;
+                scan.order.push_back((path, generation));
+            }
+        }
+        None => {
+            scan.next_generation += 1;
+            let generation = scan.next_generation;
+            scan.seen.insert(path.clone(), (stamp, generation));
+            scan.order.push_back((path, generation));
         }
     }
-    if scan.order.is_empty() && !scan.seen.is_empty() {
-        scan.seen.clear();
+    let order_cap = scan.seen.len() * ORDER_BLOAT_FACTOR + ORDER_BLOAT_SLACK;
+    if scan.order.len() > order_cap {
+        compact_order(scan);
     }
+}
+
+/// 重建触碰队列：只保留每个路径当前代际的记录，过期排队记录全部丢弃。
+fn compact_order(scan: &mut CacheScanState) {
+    scan.order = scan
+        .seen
+        .iter()
+        .map(|(path, (_, generation))| (path.clone(), *generation))
+        .collect();
+}
+
+/// 把 `seen` 淘汰到 `keep` 项以内：从触碰历史最旧的一端出队，代际对不上的
+/// 过期记录直接跳过，对得上的才真正移除。
+fn evict_lru(scan: &mut CacheScanState, keep: usize) {
+    while scan.seen.len() > keep {
+        let Some((path, generation)) = scan.order.pop_front() else {
+            // 触碰历史意外耗尽（不应发生）：宁可整体放弃去重重读一轮，
+            // 也不能让 watcher 卡死在这里
+            scan.seen.clear();
+            return;
+        };
+        if scan
+            .seen
+            .get(&path)
+            .is_some_and(|(_, generation_now)| *generation_now == generation)
+        {
+            scan.seen.remove(&path);
+        }
+    }
+}
+
+/// WebView2 缓存目录（登录同步窗口使用本应用标识符下的 WebView 数据目录）。
+/// 缓存目录变更监听（见 `cache_watch`）与扫描共用这一个定位，避免两处路径
+/// 漂移后出现「监听了 A 目录、扫描 B 目录」的静默失配。
+pub fn webview_cache_dir() -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")?;
+    Some(
+        PathBuf::from(local_app_data)
+            .join("com.deepseek.monitor.windows")
+            .join("EBWebView")
+            .join("Default")
+            .join("Cache")
+            .join("Cache_Data"),
+    )
 }
 
 /// 在 WebView2 缓存目录里找用量 token。
@@ -126,13 +184,7 @@ pub fn find_webview_cached_usage_token(
     scan: &mut CacheScanState,
     accept: &mut dyn FnMut(&str) -> bool,
 ) -> Option<String> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")?;
-    let cache_dir = PathBuf::from(local_app_data)
-        .join("com.deepseek.monitor.windows")
-        .join("EBWebView")
-        .join("Default")
-        .join("Cache")
-        .join("Cache_Data");
+    let cache_dir = webview_cache_dir()?;
     let entries = fs::read_dir(cache_dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -146,9 +198,13 @@ pub fn find_webview_cached_usage_token(
         }
         let stamp = (metadata.len(), metadata.modified().ok());
         if scan.seen.len() >= MAX_SEEN_ENTRIES {
-            evict_oldest_quarter(scan);
+            evict_lru(scan, MAX_SEEN_ENTRIES * 3 / 4);
         }
-        if scan.seen.get(&path) == Some(&stamp) {
+        if scan
+            .seen
+            .get(&path)
+            .is_some_and(|(seen_stamp, _)| *seen_stamp == stamp)
+        {
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
@@ -280,5 +336,84 @@ mod tests {
             None => std::env::remove_var("LOCALAPPDATA"),
         }
         assert_eq!(found, None);
+    }
+
+    // —— CacheScanState 惰性 LRU（白盒：直接操作内部状态） ——
+
+    /// 用编号路径构造已填充的扫描状态，插入顺序即编号顺序
+    fn filled_state(count: u64) -> CacheScanState {
+        let mut scan = CacheScanState::default();
+        for i in 0..count {
+            mark_seen(&mut scan, PathBuf::from(format!("f_{i:05}")), (i, None));
+        }
+        scan
+    }
+
+    #[test]
+    fn 淘汰_最旧先出() {
+        let mut scan = filled_state(10);
+        evict_lru(&mut scan, 5);
+        assert_eq!(scan.seen.len(), 5);
+        for i in 0..5u64 {
+            assert!(
+                !scan.seen.contains_key(&PathBuf::from(format!("f_{i:05}"))),
+                "f_{i:05} 是最旧的一批，应被淘汰"
+            );
+        }
+        for i in 5..10u64 {
+            assert!(scan.seen.contains_key(&PathBuf::from(format!("f_{i:05}"))));
+        }
+    }
+
+    #[test]
+    fn 淘汰_被触碰的热文件优先保留() {
+        // 区分 LRU 与 FIFO 的关键用例：f_00000 最早插入，FIFO 会先淘汰它；
+        // 但它刚被重读（内容变化）是热文件，LRU 应改为淘汰 f_00001
+        let mut scan = filled_state(10);
+        mark_seen(&mut scan, PathBuf::from("f_00000"), (100, None));
+        evict_lru(&mut scan, 9);
+        assert!(scan.seen.contains_key(&PathBuf::from("f_00000")));
+        assert!(!scan.seen.contains_key(&PathBuf::from("f_00001")));
+    }
+
+    #[test]
+    fn 淘汰_过期排队记录不会误删活表项() {
+        let mut scan = filled_state(4);
+        // 同一路径连续触碰多次，队列里留下大量过期代际记录
+        for version in 10..30 {
+            mark_seen(&mut scan, PathBuf::from("f_00000"), (version, None));
+        }
+        evict_lru(&mut scan, 0);
+        assert!(scan.seen.is_empty());
+        assert!(scan.order.is_empty());
+        // 状态仍可复用：重新填充后淘汰照常工作
+        let mut scan = filled_state(3);
+        evict_lru(&mut scan, 1);
+        assert_eq!(scan.seen.len(), 1);
+    }
+
+    #[test]
+    fn 触碰_热点文件不会把触碰队列撑大() {
+        let mut scan = CacheScanState::default();
+        for version in 0..500u64 {
+            mark_seen(&mut scan, PathBuf::from("hot"), (version, None));
+        }
+        assert_eq!(scan.seen.len(), 1);
+        assert!(
+            scan.order.len() <= ORDER_BLOAT_SLACK + ORDER_BLOAT_FACTOR,
+            "反复触碰应触发队列压缩，长度 {} 超过上限",
+            scan.order.len()
+        );
+    }
+
+    #[test]
+    fn 同一指纹重复记录_不会新增触碰() {
+        // 内容未变化的重读（例如 accept 拒收后的重扫）不应挤占触碰历史
+        let mut scan = CacheScanState::default();
+        for _ in 0..100 {
+            mark_seen(&mut scan, PathBuf::from("stable"), (7, None));
+        }
+        assert_eq!(scan.seen.len(), 1);
+        assert_eq!(scan.order.len(), 1);
     }
 }
