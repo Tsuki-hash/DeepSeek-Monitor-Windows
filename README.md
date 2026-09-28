@@ -28,7 +28,7 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 ### 安装
 
-从 [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
+从 [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
 
 运行环境：Windows 10 或 Windows 11，以及 Microsoft Edge WebView2 Runtime（Windows 11 自带，Windows 10 若缺失需单独安装）。
 
@@ -148,8 +148,8 @@ API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**�
 ### 常用命令
 
 ```powershell
-git clone https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows.git
-cd DeepSeek-Monitor-Windows
+git clone https://github.com/Tsuki-hash/DeepSeekMonitorWin.git
+cd DeepSeekMonitorWin
 npm install
 npm run tauri:dev
 ```
@@ -186,7 +186,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # 后端
 ### 代码结构
 
 ```text
-DeepSeek-Monitor-Windows/
+DeepSeekMonitorWin/
 ├── scripts/                     # check-version.mjs、verify.ps1（本地门禁）
 ├── src/                         # 前端
 │   ├── main.tsx                 # 入口
@@ -252,7 +252,7 @@ DeepSeek-Monitor-Windows/
 | --- | --- | --- | --- |
 | 初代 | [JayHome137/DeepSeekMonitor](https://github.com/JayHome137/DeepSeekMonitor) | macOS 菜单栏与 WidgetKit 桌面小组件 | Swift 5.9+、SwiftUI、AppKit、WidgetKit |
 | 二代 | [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) | Windows 桌面端 | Tauri 2、React、TypeScript、Rust |
-| 本项目 | [Tsuki-hash/DeepSeek-Monitor-Windows](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows) | Windows 桌面端 | 同上，承接二代继续迭代 |
+| 本项目 | [Tsuki-hash/DeepSeekMonitorWin](https://github.com/Tsuki-hash/DeepSeekMonitorWin) | Windows 桌面端 | 同上，承接二代继续迭代 |
 
 - **感谢 [@JayHome137](https://github.com/JayHome137/DeepSeekMonitor)**：用 Swift、SwiftUI、AppKit 与 WidgetKit 做出了 macOS 版本，确立了「在桌面角落随手看一眼余额与用量」这个产品形态。没有这个原项目，就没有后面所有版本。
 - **感谢 [@Joyi-code](https://github.com/Joyi-code/DeepSeekMonitorWindows)**：把这个想法完整移植到 Windows——重建界面与后端，处理托盘驻留、无边框窗口、WebView2 登录态同步等大量平台细节，并把仓库与安装包完整开源。**本项目的代码基线正是来自这个仓库。**

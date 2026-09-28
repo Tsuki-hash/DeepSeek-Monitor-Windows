@@ -28,7 +28,7 @@ This project combines three things:
 
 ### Install
 
-Download `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows/releases/latest). Installing over an older version does not require uninstalling it first.
+Download `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest). Installing over an older version does not require uninstalling it first.
 
 Requirements: Windows 10 or Windows 11, plus the Microsoft Edge WebView2 Runtime (included with Windows 11; install separately on Windows 10 if missing).
 
@@ -148,8 +148,8 @@ The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepsee
 ### Commands
 
 ```powershell
-git clone https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows.git
-cd DeepSeek-Monitor-Windows
+git clone https://github.com/Tsuki-hash/DeepSeekMonitorWin.git
+cd DeepSeekMonitorWin
 npm install
 npm run tauri:dev
 ```
@@ -184,7 +184,7 @@ The installer is produced in `src-tauri/target/release/bundle/nsis/`. If you see
 ### Code layout
 
 ```text
-DeepSeek-Monitor-Windows/
+DeepSeekMonitorWin/
 ├── .github/workflows/           # CI (version consistency, frontend tests + build, cargo check/clippy/test)
 ├── src/                         # Frontend
 │   ├── main.tsx                 # The entire UI: dashboard, settings, detail page
@@ -247,7 +247,7 @@ This project continues the DeepSeek Monitor family on the Windows desktop. It bu
 | --- | --- | --- | --- |
 | Original | [JayHome137/DeepSeekMonitor](https://github.com/JayHome137/DeepSeekMonitor) | macOS menu bar and WidgetKit desktop widget | Swift 5.9+, SwiftUI, AppKit, WidgetKit |
 | Second | [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows) | Windows desktop | Tauri 2, React, TypeScript, Rust |
-| This project | [Tsuki-hash/DeepSeek-Monitor-Windows](https://github.com/Tsuki-hash/DeepSeek-Monitor-Windows) | Windows desktop | Same as the second generation, continued |
+| This project | [Tsuki-hash/DeepSeekMonitorWin](https://github.com/Tsuki-hash/DeepSeekMonitorWin) | Windows desktop | Same as the second generation, continued |
 
 - **Thanks to [@JayHome137](https://github.com/JayHome137/DeepSeekMonitor)** for building the macOS version with Swift, SwiftUI, AppKit, and WidgetKit, and for establishing the idea of glancing at your balance and usage from the corner of your desktop. Without that original project, none of the later versions would exist.
 - **Thanks to [@Joyi-code](https://github.com/Joyi-code/DeepSeekMonitorWindows)** for porting that idea fully to Windows — rebuilding the interface and backend, handling a large amount of platform detail such as tray residency, frameless windows, and WebView2 login-state synchronization, and open-sourcing both the repository and the installer. **The code baseline of this project comes from that repository.**
