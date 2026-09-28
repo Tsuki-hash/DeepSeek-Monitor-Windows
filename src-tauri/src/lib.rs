@@ -74,6 +74,12 @@ pub fn run() {
                     .build(),
             )?;
 
+            // 启动时恢复主面板上次停留的位置；从未记录过（首次运行）则保持
+            // 系统默认位置，不主动贴靠托盘
+            if let Some(window) = app.get_webview_window("main") {
+                tray::restore_saved_position(&window);
+            }
+
             tray::build_tray(app)?;
             Ok(())
         })

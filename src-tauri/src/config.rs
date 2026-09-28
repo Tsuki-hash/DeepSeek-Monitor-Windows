@@ -130,6 +130,11 @@ pub struct StoredConfig {
     pub auto_refresh_enabled: bool,
     #[serde(default)]
     pub autostart: bool,
+    /// 主面板最后一次停留的位置（物理像素，屏幕坐标），隐藏到托盘与退出时写入，
+    /// 再次唤出/启动时恢复。带 default 的可选字段：旧配置缺它也能正常解析，
+    /// 因此不需要递增 schema 版本。None = 从未记录（首次运行），按托盘附近定位。
+    #[serde(default)]
+    pub window_position: Option<[i32; 2]>,
 }
 
 impl StoredConfig {
@@ -460,6 +465,7 @@ mod tests {
             refresh_interval_seconds: 300,
             auto_refresh_enabled: true,
             autostart: false,
+            window_position: None,
         };
         write_stored_config(&config).unwrap();
 
@@ -487,12 +493,14 @@ mod tests {
             refresh_interval_seconds: 3600,
             auto_refresh_enabled: true,
             autostart: true,
+            window_position: Some([-1920, 240]),
         };
         write_stored_config(&config).unwrap();
         let reread = read_stored_config().unwrap();
         assert_eq!(reread.api_key, config.api_key);
         assert_eq!(reread.usage_token, config.usage_token);
         assert_eq!(reread.refresh_interval_seconds, 3600);
+        assert_eq!(reread.window_position, Some([-1920, 240]));
         assert!(reread.auto_refresh_enabled && reread.autostart);
     }
 

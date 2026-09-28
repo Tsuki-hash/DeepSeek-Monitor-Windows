@@ -84,8 +84,43 @@ fn position_near_tray(window: &WebviewWindow) -> tauri::Result<()> {
     window.set_position(Position::Physical(PhysicalPosition::new(x, y)))
 }
 
+/// 把主面板当前物理位置写入配置（隐藏到托盘与退出时调用），供下次唤出/启动时
+/// 恢复到用户拖动后停留的位置。位置记忆是体验优化而非关键数据：任何失败都
+/// 静默忽略，不影响显隐主流程。
+fn persist_main_window_position(window: &WebviewWindow) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let _ = crate::config::edit_config(|config| {
+        config.window_position = Some([position.x, position.y]);
+        Ok(())
+    });
+}
+
+/// 恢复主面板上次停留的位置。返回 `false` 表示没有可恢复的记录
+/// （首次运行/从未记录）或记录的位置已不在任何显示器上
+/// （显示器被拔掉、分辨率变化），调用方应回退到「贴靠托盘」定位。
+pub(crate) fn restore_saved_position(window: &WebviewWindow) -> bool {
+    let Ok(config) = crate::config::read_stored_config() else {
+        return false;
+    };
+    let Some([x, y]) = config.window_position else {
+        return false;
+    };
+    // 位置的左上角坐标必须仍落在某块显示器内，否则恢复出来的面板可能整个看不见
+    let Ok(Some(_)) = window.monitor_from_point(x as f64, y as f64) else {
+        return false;
+    };
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+        .is_ok()
+}
+
 pub(crate) fn show_main_window(window: &WebviewWindow) {
-    let _ = position_near_tray(window);
+    // 优先回到用户上次停留的位置；没有记录或记录失效时才按托盘附近定位
+    if !restore_saved_position(window) {
+        let _ = position_near_tray(window);
+    }
     let _ = window.show();
     let _ = window.set_focus();
     // 通知前端：面板被唤出，立刻拉一次最新数据
@@ -93,6 +128,8 @@ pub(crate) fn show_main_window(window: &WebviewWindow) {
 }
 
 pub(crate) fn hide_main_window_inner(window: &WebviewWindow) -> Result<(), String> {
+    // 隐藏前记住当前位置，下次唤出回到这里（用户手动拖动过的位置得以保留）
+    persist_main_window_position(window);
     window.hide().map_err(|error| error.to_string())?;
     // 通知前端：面板已隐藏，停掉自动刷新定时器
     let _ = window.emit(EVENT_MAIN_WINDOW_HIDDEN, ());
@@ -115,6 +152,10 @@ pub(crate) fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "quit" => {
+                // 退出前记住主面板位置，下次启动回到原位
+                if let Some(window) = app.get_webview_window("main") {
+                    persist_main_window_position(&window);
+                }
                 app.exit(0);
             }
             _ => {}
