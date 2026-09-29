@@ -20,9 +20,16 @@ function UsageRow({
   const isOther = modelKey === "other";
   const tint = isFlash ? "flash" : isOther ? "other" : "pro";
   // 显示名优先取后端 model_slot 的 name，避免前后端双源漂移
-  const name = data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
+  const name =
+    data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
+  // 这一行只有约 115px 给 token 数，千万级以上再写精确千分位会溢出成省略号，
+  // 因此大数用紧凑写法，精确值仍在详情页的柱状图浮窗里可查。
   const tokensText = data
-    ? `${fmtInt(data.totalTokens)} Tokens`
+    ? `${
+        data.totalTokens < 10_000_000
+          ? fmtInt(data.totalTokens)
+          : fmtTokensShort(data.totalTokens)
+      } Tokens`
     : state === "loading"
       ? "查询中…"
       : state === "nokey"

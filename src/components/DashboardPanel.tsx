@@ -32,6 +32,8 @@ function DashboardPanel({
   onDetail: (model: ModelName) => void;
 }) {
   const { theme, toggleTheme } = useTheme();
+  // 手动刷新路径会把状态打回 loading；静默刷新保持 ok 不转，避免托盘唤出时图标常转
+  const loading = balanceState === "loading" || usageState === "loading";
   const flash = usage?.models.find((item) => item.key === "flash") ?? null;
   const pro = usage?.models.find((item) => item.key === "pro") ?? null;
   const other = usage?.models.find((item) => item.key === "other") ?? null;
@@ -54,7 +56,10 @@ function DashboardPanel({
         </div>
         <div className="header-actions">
           <button aria-label="刷新" onClick={onRefresh}>
-            <RefreshCw size={22} />
+            <RefreshCw
+              size={20}
+              className={loading ? "refresh-spin" : undefined}
+            />
           </button>
           <div className="skin-menu-wrap">
             <button
@@ -63,14 +68,14 @@ function DashboardPanel({
               title={theme === "dark" ? "Switch to light" : "Switch to dark"}
               onClick={toggleTheme}
             >
-              <Shirt size={21} />
+              <Shirt size={20} />
             </button>
           </div>
           <button aria-label="设置" onClick={onSettings}>
-            <Settings size={23} />
+            <Settings size={20} />
           </button>
           <button aria-label="关闭" onClick={onClose}>
-            <X size={25} />
+            <X size={20} />
           </button>
         </div>
       </header>

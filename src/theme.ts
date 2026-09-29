@@ -6,8 +6,10 @@ export const THEME_STORAGE_KEY = "ui-theme";
 export const THEME_ATTR = "data-theme";
 export type Theme = "dark" | "light";
 
+// 默认皮肤为浅色「明亮工作台」：只有明确存过 "dark" 才回到深色。
+// 已保存偏好的用户不受影响，新安装用户不会落在旧默认值上。
 export const readStoredTheme = (): Theme =>
-  localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark";
+  localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
 
 export const applyTheme = (theme: Theme) =>
   document.documentElement.setAttribute(THEME_ATTR, theme);

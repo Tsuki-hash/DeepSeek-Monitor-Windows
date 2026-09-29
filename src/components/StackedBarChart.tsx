@@ -1,5 +1,5 @@
 import React from "react";
-import { fmtInt, fmtTokensShort, mmdd } from "../format";
+import { fmtInt, fmtTokensShort, mmdd, todayStr } from "../format";
 
 export type StackedPoint = {
   date: string;
@@ -44,9 +44,15 @@ function StackedBarChart({
             `${point.date}：合计 ${fmtInt(point.total)} tokens，` +
             `命中 ${fmtInt(point.hit)}，未命中 ${fmtInt(point.miss)}，输出 ${fmtInt(point.response)}` +
             (point.other > 0 ? `，其他 ${fmtInt(point.other)}` : "");
+          // 最近 7 天窗口的末柱恒为今天；给整排日期一个中文锚点，读图不用数格子
+          const isToday =
+            idx === points.length - 1 && point.date === todayStr();
+          const dayLabel = isToday ? "今天" : mmdd(point.date);
           return (
             <div
-              className={isSummary ? "bar-column" : "detail-bar-column"}
+              className={`${isSummary ? "bar-column" : "detail-bar-column"}${
+                hoveredIdx === idx ? " hovered" : ""
+              }`}
               key={point.date}
             >
               {hoveredIdx === idx && point.total > 0 && (
@@ -154,9 +160,9 @@ function StackedBarChart({
                 </div>
               </div>
               {isSummary ? (
-                <span className="bar-day">{mmdd(point.date)}</span>
+                <span className="bar-day">{dayLabel}</span>
               ) : (
-                <em>{mmdd(point.date)}</em>
+                <em>{dayLabel}</em>
               )}
             </div>
           );

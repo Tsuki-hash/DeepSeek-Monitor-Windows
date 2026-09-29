@@ -121,6 +121,9 @@ function App() {
   // （见 lib.rs 的 EVENT_MAIN_WINDOW_SHOWN / EVENT_MAIN_WINDOW_HIDDEN），
   // 这样从托盘唤出、托盘左键切换、程序内点关闭三条路径都覆盖得到。
   const [windowVisible, setWindowVisible] = React.useState(true);
+  // 托盘唤出时 +1，作为 stage 的 key 重挂载当前视图，重放面板入场动画。
+  // 数据状态都在 App 手里，重挂载不丢数据，只重置图表悬停这类瞬态。
+  const [showEpoch, setShowEpoch] = React.useState(0);
   // 首帧后按实际窗口可见性校正，避免启动时若已在托盘仍多跑一轮刷新
   React.useEffect(() => {
     void invoke<boolean>("is_main_window_visible")
@@ -131,6 +134,7 @@ function App() {
   React.useEffect(() => {
     const shown = listen("main-window-shown", () => {
       setWindowVisible(true);
+      setShowEpoch((epoch) => epoch + 1);
       // 面板被唤出即拉最新数据，避免托盘唤出后看到的是旧快照。
       // 走静默刷新：唤出瞬间面板上已有上一轮的数据，不该闪一下「查询中…」。
       refreshAll(true);
@@ -176,7 +180,7 @@ function App() {
   }, []);
 
   return (
-    <div className="stage">
+    <div className="stage" key={showEpoch}>
       {view === "dashboard" && (
         <DashboardPanel
           balance={balance}

@@ -28,9 +28,18 @@ function BalanceCard({
   const statusText =
     state === "ok" ? (balance?.isAvailable ? "可用" : "余额不足") : "—";
   const statusOff = state === "ok" && balance != null && !balance.isAvailable;
+  // 卡片顶部的状态灯与状态胶囊同源，给面板一个一眼可读的仪表指示灯
+  const railState =
+    state === "ok"
+      ? statusOff
+        ? "warn"
+        : "ok"
+      : state === "error"
+        ? "danger"
+        : "idle";
 
   return (
-    <article className="card balance-card">
+    <article className={`card balance-card rail-${railState}`}>
       <div className="card-title-row">
         <div className="caption-with-icon">
           <CreditCard size={15} />
@@ -41,7 +50,11 @@ function BalanceCard({
           {statusText}
         </div>
       </div>
-      <div className={`balance-amount ${state !== "ok" ? "balance-dim" : ""}`}>
+      {/* key 取展示值：值变化时重挂载，驱动 value-in 动画；值不变则不重播 */}
+      <div
+        key={amount}
+        className={`balance-amount ${state !== "ok" ? "balance-dim" : ""}`}
+      >
         {amount}
       </div>
       {state === "error" && <div className="balance-error">{error}</div>}
@@ -52,14 +65,18 @@ function BalanceCard({
             <span>当日消耗</span>
           </div>
           {/* 用量费用恒为人民币计价，不能跟余额币种（可能是 USD）走 */}
-          <strong>{todayCost != null ? fmtMoney(todayCost, "¥") : "—"}</strong>
+          <strong key={todayCost ?? "na"}>
+            {todayCost != null ? fmtMoney(todayCost, "¥") : "—"}
+          </strong>
         </div>
         <div className="mini-card">
           <div className="caption-with-icon orange">
             <CalendarDays size={15} />
             <span>本月消费</span>
           </div>
-          <strong>{monthCost != null ? fmtMoney(monthCost, "¥") : "—"}</strong>
+          <strong key={monthCost ?? "na"}>
+            {monthCost != null ? fmtMoney(monthCost, "¥") : "—"}
+          </strong>
         </div>
       </div>
     </article>
