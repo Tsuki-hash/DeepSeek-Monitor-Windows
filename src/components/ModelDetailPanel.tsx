@@ -28,7 +28,8 @@ function ModelDetailPanel({
   const isOther = model === "other";
   const data = usage?.models.find((item) => item.key === model) ?? null;
   // 显示名以后端 model_slot 为准，避免前后端双源漂移
-  const title = data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
+  const title =
+    data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
   const tintClass = isFlash ? "flash" : isOther ? "other" : "pro";
   const cost = data ? fmtMoney(data.cost) : "—";
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
