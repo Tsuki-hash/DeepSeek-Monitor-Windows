@@ -6,7 +6,7 @@ dist/
 src-tauri/target/
 
 # ---------- Markdown docs policy ----------
-# Public docs are only the two READMEs. Other Markdown (internal notes, drafts)
+# Public docs are the two READMEs and CHANGELOG. Other Markdown (internal notes, drafts)
 # stays local to keep the repository free of unfinished documents.
 # To track an extra file, add `!<filename>` below (negate cannot re-include
 # files under an ignored directory such as docs/ without unignoring the dir).
@@ -14,6 +14,7 @@ src-tauri/target/
 *.MD
 !README.md
 !README_EN.md
+!CHANGELOG.md
 
 # ---------- Local working documents（不入库）----------
 # Convention: docs/reviews/<date>/<date>-vN.md

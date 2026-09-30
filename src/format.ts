@@ -7,6 +7,7 @@
 // 注意本文件**不得** import 任何浏览器或 Tauri API，否则 Node 侧测不了。
 
 export type UsageDay = {
+  unavailable?: boolean;
   date: string;
   flashTokens: number;
   flashCacheHit: number;
@@ -33,10 +34,18 @@ export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
  * 因此 K 档上界取到 999_499（四舍五入后仍为 999.5K），超过就升到 M 档。
  */
 export const fmtTokensShort = (n: number) => {
+  if (n >= 999_950_000_000) return (n / 1e12).toFixed(1) + "T";
+  if (n >= 999_950_000) return (n / 1e9).toFixed(1) + "B";
   if (n >= 1e8) return (n / 1e6).toFixed(0) + "M";
   if (n >= 999_500) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return String(Math.round(n));
+};
+
+/** 紧凑卡片的大额展示；完整金额保留在 title 与无障碍标签。 */
+export const fmtMoneyDisplay = (n: number, symbol = "¥") => {
+  if (n >= 1e4) return symbol + fmtTokensShort(n);
+  return fmtMoney(n, symbol);
 };
 
 export const fmtMoney = (n: number, symbol = "¥") => symbol + n.toFixed(2);
@@ -55,8 +64,10 @@ export const mmdd = (date: string) => {
   return parts.length === 3 ? `${Number(parts[1])}/${Number(parts[2])}` : date;
 };
 
-/** 本地时区的今天，格式与接口返回的 date 字段一致（`YYYY-MM-DD`）。 */
-export const todayStr = () => dateKey(new Date());
+/** 平台东八区记账日期，与接口返回的 date 一致。 */
+export const accountingDateKey = (date: Date) =>
+  new Date(date.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
+export const todayStr = () => accountingDateKey(new Date());
 
 /** Date → `YYYY-MM-DD`（本地时区，不走 toISOString 以免被 UTC 偏移带偏一天）。 */
 export const dateKey = (date: Date) =>
@@ -93,18 +104,29 @@ export const emptyUsageDay = (date: string): UsageDay => ({
  * 两个刻意的取舍：
  * 1. 过滤掉 `date > today` 的条目——接口在月初可能返回整月（含未来日期）的占位行，
  *    不过滤会让活跃度柱状图出现「未来几天有数据」的怪象；
- * 2. 按**本地日期**逐天递减生成，而不是拿接口返回的最后一天往前数——跨月时
+ * 2. 按**东八区记账日期**逐天递减生成，而不是拿接口返回的最后一天往前数——跨月时
  *    上个月的日期必须能被正确补进窗口，否则月初打开面板会看到几根空柱。
  */
-export const recentUsageDays = (days: UsageDay[], count = 7): UsageDay[] => {
+export const recentUsageDays = (
+  days: UsageDay[],
+  count = 7,
+  unavailableDates: string[] = [],
+): UsageDay[] => {
   const today = todayStr();
   const source = new Map(
     days.filter((day) => day.date <= today).map((day) => [day.date, day]),
   );
-  const now = new Date();
+  const now = new Date(`${today}T00:00:00Z`);
   return Array.from({ length: count }, (_, index) => {
-    const date = dateKey(addDays(now, index - count + 1));
-    return source.get(date) ?? emptyUsageDay(date);
+    const date = new Date(now.getTime() + (index - count + 1) * 86400_000)
+      .toISOString()
+      .slice(0, 10);
+    return (
+      source.get(date) ?? {
+        ...emptyUsageDay(date),
+        unavailable: unavailableDates.includes(date),
+      }
+    );
   });
 };
 
@@ -119,16 +141,20 @@ export const nextLoadStateAfterError = (
   prev: "loading" | "ok" | "error" | "nokey",
   silent: boolean,
   message: string,
+  code?: string,
 ): "loading" | "ok" | "error" | "nokey" => {
   if (silent && prev === "ok") {
     return "ok";
   }
-  return message.includes("未配置") ? "nokey" : "error";
+  return (code ? code === "not_configured" : message.includes("未配置"))
+    ? "nokey"
+    : "error";
 };
 
 export type ChartScope = "all" | "flash" | "pro" | "other";
 
 export type ChartPoint = {
+  unavailable?: boolean;
   date: string;
   hit: number;
   miss: number;
@@ -185,6 +211,7 @@ export const chartPointFromDay = (
   const segmented = hit + miss + response + knownOther;
   if (scope !== "all") {
     return {
+      unavailable: day.unavailable,
       date: day.date,
       hit,
       miss,
@@ -195,5 +222,13 @@ export const chartPointFromDay = (
   }
   const total = Math.max(day.totalTokens, segmented);
   const other = knownOther + (total - segmented);
-  return { date: day.date, hit, miss, response, other, total };
+  return {
+    date: day.date,
+    hit,
+    miss,
+    response,
+    other,
+    total,
+    unavailable: day.unavailable,
+  };
 };

@@ -86,6 +86,7 @@ pub fn token_breakdown(usage: &[Entry]) -> TokenBreakdown {
     // 若三者并存且 HIT+MISS ≠ PROMPT_TOKEN，记 warn 方便抓真实样本反推口径。
     if result.cache_hit == 0 && result.cache_miss == 0 {
         result.total += prompt_total;
+        result.other += prompt_total;
     } else if prompt_total > 0 {
         let detailed = result.cache_hit + result.cache_miss;
         if detailed != prompt_total {
@@ -267,6 +268,7 @@ mod tests {
     fn 只有_prompt_token_时_兜底计入总量() {
         let b = token_breakdown(&[entry("PROMPT_TOKEN", "800.0")]);
         assert_eq!(b.total, 800);
+        assert_eq!(b.other, 800);
         assert_eq!(b.cache_hit, 0);
         assert_eq!(b.cache_miss, 0);
     }

@@ -1,13 +1,14 @@
 // 设置页的状态与动作（评审 F-09：从 SettingsPanel 拆出，组件只留视图）。
-// 拆分是纯搬迁：invoke / listen / 剪贴板调用与状态流转都在这里，行为与拆分前逐行等价。
+// invoke / listen / 剪贴板调用、保存回滚与用户反馈集中在这里。
 
 import React from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { currencySymbol, fmtMoney } from "./format";
-import type { AppConfig, BalanceData, UsageResult } from "./types";
+import type { AppConfig, BalanceData, SavedApiKey, UsageResult } from "./types";
 import { fetchCurrentUsage } from "./usage-api";
+import { errorMessage } from "./error-state";
 
 function useSettingsActions(handlers: {
   onUsageLoaded: (usage: UsageResult) => void;
@@ -25,7 +26,7 @@ function useSettingsActions(handlers: {
           return usage;
         })
         .catch((error) => {
-          const message = typeof error === "string" ? error : "用量刷新失败";
+          const message = errorMessage(error);
           setUsageStatus(`${prefix}，但用量刷新失败：${message}`);
           setShowManualPaste(true);
           return null;
@@ -49,6 +50,9 @@ export type SettingsState = {
   autoRefresh: boolean;
   autostart: boolean;
   usageStatus: string;
+  settingErrors: Partial<
+    Record<"refresh" | "autoRefresh" | "autostart", string>
+  >;
   usageSyncing: boolean;
   showManualPaste: boolean;
   setShowManualPaste: React.Dispatch<React.SetStateAction<boolean>>;
@@ -57,20 +61,26 @@ export type SettingsState = {
   pasteApiKey: () => void;
   saveUsageToken: () => void;
   clearUsageToken: () => void;
+  forgetUsageSession: () => void;
   pasteUsageToken: () => void;
   startUsageSync: () => void;
+  cancelUsageSync: () => void;
   saveRefreshInterval: (seconds: number) => void;
   saveAutoRefreshEnabled: (enabled: boolean) => void;
   saveAutostart: (enabled: boolean) => void;
 };
 
 export function useSettingsState(handlers: {
+  onBalanceLoaded: (balance: BalanceData) => void;
+  onBalanceCleared: () => void;
   onUsageLoaded: (usage: UsageResult) => void;
   onUsageCleared: () => void;
   onRefreshIntervalChanged: (seconds: number) => void;
   onAutoRefreshChanged: (enabled: boolean) => void;
 }): SettingsState {
   const {
+    onBalanceLoaded,
+    onBalanceCleared,
     onUsageLoaded,
     onUsageCleared,
     onRefreshIntervalChanged,
@@ -81,18 +91,21 @@ export function useSettingsState(handlers: {
   const [config, setConfig] = React.useState<AppConfig | null>(null);
   const [status, setStatus] = React.useState("正在读取本地配置");
   const [busy, setBusy] = React.useState(false);
+  const preferenceBusy = React.useRef(false);
+  const [settingErrors, setSettingErrors] = React.useState<
+    SettingsState["settingErrors"]
+  >({});
   const [refresh, setRefresh] = React.useState(60);
   const [autoRefresh, setAutoRefresh] = React.useState(false);
   const [autostart, setAutostart] = React.useState(false);
   const [usageToken, setUsageToken] = React.useState("");
   const [usageStatus, setUsageStatus] = React.useState("");
   const [usageSyncing, setUsageSyncing] = React.useState(false);
+  const syncRequestId = React.useRef(0);
   const [showManualPaste, setShowManualPaste] = React.useState(false);
   // 空串表示「版本未知」。刻意不写死一个兜底版本号：那个数字会随着发版过期，
   // 显示出来反而是错的信息，不如显示「—」。
   const [appVersion, setAppVersion] = React.useState("");
-  // 「等待登录」的自动解锁定时器：组件卸载时清理，避免卸载后回调触发 setState
-  const syncResetTimer = React.useRef(0);
   const configPath =
     config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
@@ -105,7 +118,9 @@ export function useSettingsState(handlers: {
         setAutostart(nextConfig.autostart);
         setStatus(
           nextConfig.apiKeyConfigured
-            ? `已配置 ${nextConfig.apiKeyPreview}`
+            ? nextConfig.apiKeyPreview
+              ? `已配置 ${nextConfig.apiKeyPreview}`
+              : "API Key 已配置"
             : "未配置 API Key",
         );
         setUsageStatus(
@@ -121,7 +136,7 @@ export function useSettingsState(handlers: {
           setStatus("浏览器预览模式，未连接本地配置");
           return;
         }
-        setStatus(typeof error === "string" ? error : "读取本地配置失败");
+        setStatus(errorMessage(error));
       });
   }, []);
 
@@ -130,8 +145,6 @@ export function useSettingsState(handlers: {
       .then(setAppVersion)
       .catch(() => setAppVersion(""));
   }, []);
-
-  React.useEffect(() => () => window.clearTimeout(syncResetTimer.current), []);
 
   // 保存 Token 之后刷新用量。这里刻意不向外抛出（见 useSettingsActions）。
   const refreshUsageAfterToken = useSettingsActions({
@@ -144,6 +157,7 @@ export function useSettingsState(handlers: {
     const unlistenPromise = listen<AppConfig>(
       "usage-token-captured",
       (event) => {
+        syncRequestId.current += 1;
         setConfig(event.payload);
         setUsageSyncing(false);
         void refreshUsageAfterToken("已通过网页登录自动同步用量 Token");
@@ -156,6 +170,7 @@ export function useSettingsState(handlers: {
 
   React.useEffect(() => {
     const unlistenPromise = listen("usage-sync-ended", () => {
+      syncRequestId.current += 1;
       setUsageSyncing(false);
       setUsageStatus(
         "未获取到用量 Token。可再次点击同步，或使用方式二手动粘贴。",
@@ -179,25 +194,22 @@ export function useSettingsState(handlers: {
 
   const saveApiKey = React.useCallback(() => {
     setBusy(true);
-    void invoke<AppConfig>("save_api_key", { apiKey })
-      .then((nextConfig) => {
+    setStatus("正在验证 API Key…");
+    void invoke<SavedApiKey>("save_api_key", { apiKey })
+      .then(({ config: nextConfig, balance }) => {
         setConfig(nextConfig);
         setApiKey("");
-        setStatus("已保存，正在验证 Key…");
-        return invoke<BalanceData>("fetch_balance");
-      })
-      .then((balance) => {
+        onBalanceLoaded(balance);
         const symbol = currencySymbol(balance.currency);
         const tip = balance.isAvailable ? "" : "（余额不足）";
         setStatus(`验证通过，当前余额 ${symbol}${balance.totalBalance}${tip}`);
       })
       .catch((error) => {
-        // 保存已成功、仅后续验证失败时不能笼统说「保存或验证失败」
-        const message = typeof error === "string" ? error : "验证失败";
-        setStatus(`Key 已保存，但验证未通过：${message}`);
+        const message = errorMessage(error);
+        setStatus(message);
       })
       .finally(() => setBusy(false));
-  }, [apiKey]);
+  }, [apiKey, onBalanceLoaded]);
 
   const clearApiKey = React.useCallback(() => {
     setBusy(true);
@@ -206,12 +218,13 @@ export function useSettingsState(handlers: {
         setConfig(nextConfig);
         setApiKey("");
         setStatus("已清除 API Key");
+        onBalanceCleared();
       })
       .catch((error) => {
-        setStatus(typeof error === "string" ? error : "清除失败");
+        setStatus(errorMessage(error));
       })
       .finally(() => setBusy(false));
-  }, []);
+  }, [onBalanceCleared]);
 
   const pasteUsageToken = React.useCallback(async () => {
     try {
@@ -224,47 +237,54 @@ export function useSettingsState(handlers: {
   }, []);
 
   const startUsageSync = React.useCallback(() => {
+    const requestId = ++syncRequestId.current;
     setUsageSyncing(true);
     setUsageStatus("正在打开登录窗口…");
     void invoke<boolean>("start_usage_sync")
       .then((synced) => {
+        if (requestId !== syncRequestId.current) return;
         if (!synced) {
           setUsageStatus(
-            "登录完成后，再次点击本按钮即可同步用量（可多点几次）",
+            "等待网页登录，完成后将自动校验并同步。关闭登录窗口可结束等待。",
           );
+        } else {
+          setUsageSyncing(false);
         }
         // synced=true 时由 usage-token-captured 事件刷新数据并更新状态
       })
       .catch((error) => {
-        setUsageStatus(typeof error === "string" ? error : "打开登录窗口失败");
-      })
-      .finally(() => {
-        // 短暂忙碌后自动恢复可点击，允许用户登录后反复点击触发同步
-        syncResetTimer.current = window.setTimeout(
-          () => setUsageSyncing(false),
-          2500,
-        );
+        if (requestId !== syncRequestId.current) return;
+        setUsageSyncing(false);
+        setUsageStatus(errorMessage(error));
       });
+  }, []);
+
+  const cancelUsageSync = React.useCallback(() => {
+    syncRequestId.current += 1;
+    void invoke("cancel_usage_sync")
+      .then(() => {
+        setUsageSyncing(false);
+        setUsageStatus("已取消同步，原 Token 未更改");
+      })
+      .catch((error) => setUsageStatus(errorMessage(error)));
   }, []);
 
   const saveUsageToken = React.useCallback(() => {
     setBusy(true);
+    setUsageStatus("正在验证候选 Token…");
     void invoke<AppConfig>("save_usage_token", { usageToken })
       .then((nextConfig) => {
         setConfig(nextConfig);
         setUsageToken("");
-        setUsageStatus("已保存，正在验证用量 Token…");
-        return refreshUsageAfterToken("手动 Token 已保存");
+        setUsageStatus("验证通过并已保存，正在刷新用量…");
       })
       .catch((error) => {
         // 走到这里说明是「保存」这一步失败（刷新阶段的失败已在 refreshUsageAfterToken
         // 内处理并给出更准确的文案），所以不再笼统地说"保存或验证失败"。
-        setUsageStatus(
-          typeof error === "string" ? error : "用量 Token 保存失败",
-        );
+        setUsageStatus(errorMessage(error));
       })
       .finally(() => setBusy(false));
-  }, [refreshUsageAfterToken, usageToken]);
+  }, [usageToken]);
 
   const clearUsageToken = React.useCallback(() => {
     setBusy(true);
@@ -273,16 +293,50 @@ export function useSettingsState(handlers: {
         setConfig(nextConfig);
         setUsageToken("");
         setUsageStatus("已清除用量 Token");
+        setUsageSyncing(false);
         onUsageCleared();
       })
       .catch((error) => {
-        setUsageStatus(typeof error === "string" ? error : "清除失败");
+        setUsageStatus(errorMessage(error));
       })
       .finally(() => setBusy(false));
   }, [onUsageCleared]);
 
+  const forgetUsageSession = React.useCallback(() => {
+    setBusy(true);
+    setUsageStatus("正在清除应用内的网页登录数据…");
+    void invoke<AppConfig>("forget_usage_session")
+      .then((nextConfig) => {
+        setConfig(nextConfig);
+        setUsageToken("");
+        setUsageSyncing(false);
+        onUsageCleared();
+        setUsageStatus(
+          "已清除监控 Token 和应用内网页登录数据，下次同步需要重新登录",
+        );
+      })
+      .catch((error) => setUsageStatus(errorMessage(error)))
+      .finally(() => setBusy(false));
+  }, [onUsageCleared]);
+
+  React.useEffect(() => {
+    const cleared = listen<AppConfig>("usage-token-cleared", (event) => {
+      setConfig(event.payload);
+      setUsageToken("");
+      setUsageSyncing(false);
+      onUsageCleared();
+    });
+    return () => {
+      void cleared.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, [onUsageCleared]);
+
   const saveRefreshInterval = React.useCallback(
     (seconds: number) => {
+      if (preferenceBusy.current) return;
+      preferenceBusy.current = true;
+      setBusy(true);
+      setSettingErrors((previous) => ({ ...previous, refresh: "" }));
       const previous = refresh;
       setRefresh(seconds);
       onRefreshIntervalChanged(seconds);
@@ -294,9 +348,17 @@ export function useSettingsState(handlers: {
           setRefresh(nextConfig.refreshIntervalSeconds || 60);
           onRefreshIntervalChanged(nextConfig.refreshIntervalSeconds || 60);
         })
-        .catch(() => {
+        .catch((error) => {
           setRefresh(previous);
           onRefreshIntervalChanged(previous);
+          setSettingErrors((previous) => ({
+            ...previous,
+            refresh: errorMessage(error),
+          }));
+        })
+        .finally(() => {
+          preferenceBusy.current = false;
+          setBusy(false);
         });
     },
     [onRefreshIntervalChanged, refresh],
@@ -304,6 +366,10 @@ export function useSettingsState(handlers: {
 
   const saveAutoRefreshEnabled = React.useCallback(
     (enabled: boolean) => {
+      if (preferenceBusy.current) return;
+      preferenceBusy.current = true;
+      setBusy(true);
+      setSettingErrors((previous) => ({ ...previous, autoRefresh: "" }));
       const previous = autoRefresh;
       setAutoRefresh(enabled);
       onAutoRefreshChanged(enabled);
@@ -315,9 +381,17 @@ export function useSettingsState(handlers: {
           setAutoRefresh(nextConfig.autoRefreshEnabled);
           onAutoRefreshChanged(nextConfig.autoRefreshEnabled);
         })
-        .catch(() => {
+        .catch((error) => {
           setAutoRefresh(previous);
           onAutoRefreshChanged(previous);
+          setSettingErrors((previous) => ({
+            ...previous,
+            autoRefresh: errorMessage(error),
+          }));
+        })
+        .finally(() => {
+          preferenceBusy.current = false;
+          setBusy(false);
         });
     },
     [autoRefresh, onAutoRefreshChanged],
@@ -325,6 +399,10 @@ export function useSettingsState(handlers: {
 
   const saveAutostart = React.useCallback(
     (enabled: boolean) => {
+      if (preferenceBusy.current) return;
+      preferenceBusy.current = true;
+      setBusy(true);
+      setSettingErrors((previous) => ({ ...previous, autostart: "" }));
       const previous = autostart;
       setAutostart(enabled);
       void invoke<AppConfig>("save_autostart", { autostart: enabled })
@@ -332,7 +410,17 @@ export function useSettingsState(handlers: {
           setConfig(nextConfig);
           setAutostart(nextConfig.autostart);
         })
-        .catch(() => setAutostart(previous));
+        .catch((error) => {
+          setAutostart(previous);
+          setSettingErrors((previous) => ({
+            ...previous,
+            autostart: errorMessage(error),
+          }));
+        })
+        .finally(() => {
+          preferenceBusy.current = false;
+          setBusy(false);
+        });
     },
     [autostart],
   );
@@ -351,6 +439,7 @@ export function useSettingsState(handlers: {
     autoRefresh,
     autostart,
     usageStatus,
+    settingErrors,
     usageSyncing,
     showManualPaste,
     setShowManualPaste,
@@ -359,8 +448,10 @@ export function useSettingsState(handlers: {
     pasteApiKey,
     saveUsageToken,
     clearUsageToken,
+    forgetUsageSession,
     pasteUsageToken,
     startUsageSync,
+    cancelUsageSync,
     saveRefreshInterval,
     saveAutoRefreshEnabled,
     saveAutostart,

@@ -12,19 +12,40 @@ import {
 import { refreshOptions } from "../usage-api";
 import { useTheme } from "../theme";
 import { useSettingsState } from "../settings-state";
-import type { UsageResult } from "../types";
+import type { BalanceData, UsageResult } from "../types";
+import { updateTime } from "../data-display";
+import { usageNotices } from "../usage-notices";
+import { SupportSettings } from "./SupportSettings";
 import { BrandIcon } from "./BrandIcon";
 import { SettingsSection, Toggle } from "./ui";
 
 // 状态与动作在 useSettingsState（评审 F-09 拆分），本组件只负责视图与文案。
 function SettingsPanel({
+  balanceUpdatedAt,
+  usageUpdatedAt,
+  balanceError = "",
+  usageError = "",
+  usage,
+  showDataNotices = false,
+  onRetry,
   onBack,
+  onBalanceLoaded,
+  onBalanceCleared,
   onUsageLoaded,
   onUsageCleared,
   onRefreshIntervalChanged,
   onAutoRefreshChanged,
 }: {
+  balanceUpdatedAt?: number | null;
+  usageUpdatedAt?: number | null;
+  balanceError?: string;
+  usageError?: string;
+  usage?: UsageResult | null;
+  showDataNotices?: boolean;
+  onRetry?: () => Promise<unknown>;
   onBack: () => void;
+  onBalanceLoaded: (balance: BalanceData) => void;
+  onBalanceCleared: () => void;
   onUsageLoaded: (usage: UsageResult) => void;
   onUsageCleared: () => void;
   onRefreshIntervalChanged: (seconds: number) => void;
@@ -44,6 +65,7 @@ function SettingsPanel({
     autoRefresh,
     autostart,
     usageStatus,
+    settingErrors,
     usageSyncing,
     showManualPaste,
     setShowManualPaste,
@@ -52,18 +74,29 @@ function SettingsPanel({
     pasteApiKey,
     saveUsageToken,
     clearUsageToken,
+    forgetUsageSession,
     pasteUsageToken,
     startUsageSync,
+    cancelUsageSync,
     saveRefreshInterval,
     saveAutoRefreshEnabled,
     saveAutostart,
   } = useSettingsState({
+    onBalanceLoaded,
+    onBalanceCleared,
     onUsageLoaded,
     onUsageCleared,
     onRefreshIntervalChanged,
     onAutoRefreshChanged,
   });
   const { theme, toggleTheme } = useTheme();
+  const [retrying, setRetrying] = React.useState(false);
+  const [confirmForget, setConfirmForget] = React.useState(false);
+  const notices = usageNotices(usage ?? null);
+  const noticesRef = React.useRef<HTMLDetailsElement>(null);
+  React.useEffect(() => {
+    if (showDataNotices) noticesRef.current?.scrollIntoView({ block: "start" });
+  }, [showDataNotices]);
 
   return (
     <section className="settings-panel" data-testid="settings-panel">
@@ -89,10 +122,10 @@ function SettingsPanel({
             Token，见下一节）。会保存在应用本地设置中。
           </p>
           <p className="muted">API Key 只在当前这台 Windows 电脑本地保留。</p>
-          <p className="muted config-path">
-            <span>本地位置：</span>
-            <span>{configPath}</span>
-          </p>
+          <details className="settings-disclosure">
+            <summary>本地存储位置</summary>
+            <p className="muted config-path">{configPath}</p>
+          </details>
           <div className="key-row">
             <input
               aria-label="API Key"
@@ -119,15 +152,23 @@ function SettingsPanel({
             </button>
             <span
               className={
-                config?.apiKeyConfigured ? "configured" : "configured missing"
+                config?.apiKeyConfigured
+                  ? balanceError
+                    ? "configured warning"
+                    : "configured"
+                  : "configured missing"
               }
             >
-              {config?.apiKeyConfigured ? (
+              {config?.apiKeyConfigured && !balanceError ? (
                 <CheckCircle2 size={17} />
               ) : (
                 <XCircle size={17} />
               )}
-              {config?.apiKeyConfigured ? "已配置" : "未配置"}
+              {config?.apiKeyConfigured
+                ? balanceError
+                  ? "查询异常"
+                  : "已配置"
+                : "未配置"}
             </span>
             <button
               className="secondary"
@@ -137,7 +178,14 @@ function SettingsPanel({
               清除 Key
             </button>
           </div>
-          <p className="muted">{status}</p>
+          <p className="muted" role="status">
+            {status}
+          </p>
+          {config?.configWarnings?.map((warning) => (
+            <p className="muted" role="alert" key={warning}>
+              {warning}
+            </p>
+          ))}
         </SettingsSection>
 
         <SettingsSection icon={<BarChart3 size={15} />} title="用量同步 Token">
@@ -149,24 +197,30 @@ function SettingsPanel({
           <div className="settings-actions usage-sync-actions">
             <button
               className="primary"
-              onClick={startUsageSync}
-              disabled={usageSyncing}
+              onClick={usageSyncing ? cancelUsageSync : startUsageSync}
+              disabled={busy}
             >
-              {usageSyncing ? "等待登录" : "网页登录自动同步"}
+              {usageSyncing ? "取消同步" : "网页登录自动同步"}
             </button>
             <span
               className={
                 config?.usageTokenConfigured
-                  ? "configured"
+                  ? usageError
+                    ? "configured warning"
+                    : "configured"
                   : "configured missing"
               }
             >
-              {config?.usageTokenConfigured ? (
+              {config?.usageTokenConfigured && !usageError ? (
                 <CheckCircle2 size={17} />
               ) : (
                 <XCircle size={17} />
               )}
-              {config?.usageTokenConfigured ? "已配置" : "未配置"}
+              {config?.usageTokenConfigured
+                ? usageError
+                  ? "查询异常"
+                  : "已配置"
+                : "未配置"}
             </span>
             <button
               className="secondary"
@@ -176,7 +230,55 @@ function SettingsPanel({
               清除 Token
             </button>
           </div>
-          <p className="muted">{usageStatus}</p>
+          <p className="muted" role="status">
+            {usageStatus}
+          </p>
+          <details
+            className="settings-disclosure"
+            onToggle={(event) => {
+              if (!event.currentTarget.open) setConfirmForget(false);
+            }}
+          >
+            <summary>账户隐私</summary>
+            <p className="muted">
+              “清除 Token”保留网页登录会话；“退出并忘记账户”同时清除本应用的
+              Token 与网页登录数据。API Key 和其他设置保留。
+            </p>
+            {confirmForget ? (
+              <>
+                <p>清除后需要重新登录，确定继续？</p>
+                <div className="disclosure-actions">
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setConfirmForget(false);
+                      forgetUsageSession();
+                    }}
+                  >
+                    确认清除
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => setConfirmForget(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="disclosure-actions">
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => setConfirmForget(true)}
+                >
+                  退出并忘记账户
+                </button>
+              </div>
+            )}
+          </details>
           <button
             className="link-button"
             onClick={() => setShowManualPaste((value) => !value)}
@@ -234,13 +336,93 @@ function SettingsPanel({
           )}
         </SettingsSection>
 
+        <SettingsSection icon={<Info size={15} />} title="数据状态与口径">
+          <details
+            className="settings-disclosure"
+            ref={noticesRef}
+            open={showDataNotices || undefined}
+          >
+            <summary>
+              {balanceError || usageError || notices.length
+                ? "查看更新状态与数据提示"
+                : "更新时间与统计说明"}
+            </summary>
+            <div className="update-status-row">
+              <span>余额更新</span>
+              <span>{updateTime(balanceUpdatedAt, true)}</span>
+            </div>
+            {balanceError && (
+              <p className="data-error" role="alert">
+                余额：{balanceError}
+              </p>
+            )}
+            <div className="update-status-row">
+              <span>用量更新</span>
+              <span>{updateTime(usageUpdatedAt, true)}</span>
+            </div>
+            {usageError && (
+              <p className="data-error" role="alert">
+                用量：{usageError}
+              </p>
+            )}
+            {(balanceError || usageError) && (
+              <p className="muted">
+                网络更新失败时，保留上次数据与更新时间；凭据失效时需重新配置。
+              </p>
+            )}
+            {(balanceError || usageError) && onRetry && (
+              <div className="disclosure-actions">
+                <button
+                  className="secondary"
+                  disabled={retrying || busy}
+                  onClick={() => {
+                    setRetrying(true);
+                    void onRetry().finally(() => setRetrying(false));
+                  }}
+                >
+                  {retrying ? "更新中…" : "重试更新"}
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || usageSyncing}
+                  onClick={startUsageSync}
+                >
+                  重新同步用量
+                </button>
+              </div>
+            )}
+            {notices.map((notice) => (
+              <p className="muted" key={notice}>
+                {notice}
+              </p>
+            ))}
+            <p className="muted">
+              更新时间按本机时区显示。用量按平台东八区记账：本月为自然月，图表为近7日（含今天）。
+            </p>
+            <p className="muted">
+              缓存命中率 = 命中输入 ÷（命中输入 +
+              未命中输入），不含输出与未知输入；输入明细不足时不计算。
+            </p>
+            <p className="muted">
+              T/¥ 表示本月 Token 总数 ÷ 本月人民币费用。费用为零时显示
+              —；它是用量比率，不是模型单价。
+            </p>
+          </details>
+        </SettingsSection>
+
         <SettingsSection icon={<Power size={15} />} title="开机自启">
           <p>开启后，每次登录 Windows 时自动启动 DeepSeek Monitor。</p>
           <Toggle
             label="登录时自动启动"
             checked={autostart}
             onChange={saveAutostart}
+            disabled={busy}
           />
+          {settingErrors.autostart && (
+            <p className="muted" role="alert">
+              {settingErrors.autostart}
+            </p>
+          )}
         </SettingsSection>
 
         <SettingsSection icon={<RefreshCw size={15} />} title="自动刷新">
@@ -249,7 +431,13 @@ function SettingsPanel({
             label="启用自动刷新"
             checked={autoRefresh}
             onChange={saveAutoRefreshEnabled}
+            disabled={busy}
           />
+          {settingErrors.autoRefresh && (
+            <p className="muted" role="alert">
+              {settingErrors.autoRefresh}
+            </p>
+          )}
           {autoRefresh && (
             <div className="segmented">
               {refreshOptions.map((option) => (
@@ -257,11 +445,17 @@ function SettingsPanel({
                   key={option.value}
                   className={refresh === option.value ? "selected" : ""}
                   onClick={() => saveRefreshInterval(option.value)}
+                  disabled={busy}
                 >
                   {option.label}
                 </button>
               ))}
             </div>
+          )}
+          {settingErrors.refresh && (
+            <p className="muted" role="alert">
+              {settingErrors.refresh}
+            </p>
           )}
         </SettingsSection>
 
@@ -282,6 +476,7 @@ function SettingsPanel({
             <span>当前版本</span>
             <strong>{appVersion ? `v${appVersion}` : "—"}</strong>
           </div>
+          <SupportSettings />
         </SettingsSection>
       </div>
     </section>

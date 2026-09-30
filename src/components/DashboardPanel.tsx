@@ -9,6 +9,8 @@ import { UsageRow } from "./UsageRow";
 import { UsageChart } from "./UsageChart";
 
 function DashboardPanel({
+  balanceUpdatedAt,
+  usageUpdatedAt,
   balance,
   balanceState,
   balanceError,
@@ -18,8 +20,11 @@ function DashboardPanel({
   onRefresh,
   onClose,
   onSettings,
+  onDataStatus,
   onDetail,
 }: {
+  balanceUpdatedAt?: number | null;
+  usageUpdatedAt?: number | null;
   balance: BalanceData | null;
   balanceState: LoadState;
   balanceError: string;
@@ -29,6 +34,7 @@ function DashboardPanel({
   onRefresh: () => void;
   onClose: () => void;
   onSettings: () => void;
+  onDataStatus?: () => void;
   onDetail: (model: ModelName) => void;
 }) {
   const { theme, toggleTheme } = useTheme();
@@ -63,9 +69,9 @@ function DashboardPanel({
           </button>
           <div className="skin-menu-wrap">
             <button
-              aria-label="Toggle theme"
+              aria-label="切换主题"
               className="skin-toggle"
-              title={theme === "dark" ? "Switch to light" : "Switch to dark"}
+              title={theme === "dark" ? "切换浅色" : "切换深色"}
               onClick={toggleTheme}
             >
               <Shirt size={20} />
@@ -74,13 +80,20 @@ function DashboardPanel({
           <button aria-label="设置" onClick={onSettings}>
             <Settings size={20} />
           </button>
-          <button aria-label="关闭" onClick={onClose}>
+          <button
+            aria-label="关闭"
+            title="收起到托盘，右键托盘图标可退出"
+            onClick={onClose}
+          >
             <X size={20} />
           </button>
         </div>
       </header>
 
       <BalanceCard
+        updatedAt={balanceUpdatedAt}
+        onSettings={onSettings}
+        onDataStatus={onDataStatus ?? onSettings}
         balance={balance}
         state={balanceState}
         error={balanceError}
@@ -114,7 +127,14 @@ function DashboardPanel({
         )}
       </div>
 
-      <UsageChart usage={usage} state={usageState} error={usageError} />
+      <UsageChart
+        usage={usage}
+        state={usageState}
+        error={usageError}
+        updatedAt={usageUpdatedAt}
+        onSettings={onSettings}
+        onDataStatus={onDataStatus ?? onSettings}
+      />
     </section>
   );
 }

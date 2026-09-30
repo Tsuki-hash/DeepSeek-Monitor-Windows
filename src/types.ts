@@ -3,6 +3,7 @@ import type { UsageDay } from "./format";
 export type ViewName = "dashboard" | "settings" | "detail";
 export type ModelName = "flash" | "pro" | "other";
 export type AppConfig = {
+  configWarnings?: string[];
   apiKeyConfigured: boolean;
   apiKeyPreview: string | null;
   usageTokenConfigured: boolean;
@@ -18,6 +19,7 @@ export type BalanceData = {
   grantedBalance: string;
   toppedUpBalance: string;
 };
+export type SavedApiKey = { config: AppConfig; balance: BalanceData };
 // 通用的异步加载状态，余额与用量共用。
 export type LoadState = "loading" | "ok" | "error" | "nokey";
 export type UsageModel = {
@@ -32,6 +34,8 @@ export type UsageModel = {
   cost: number;
 };
 export type UsageResult = {
+  warnings?: string[];
+  unavailableDates?: string[];
   models: UsageModel[];
   days: UsageDay[];
   monthCost: number;

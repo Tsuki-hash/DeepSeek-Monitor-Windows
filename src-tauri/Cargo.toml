@@ -6,7 +6,7 @@ authors = ["Tsuki-hash"]
 license = "MIT"
 repository = "https://github.com/Tsuki-hash/DeepSeekMonitorWin"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -31,13 +31,17 @@ base64 = "0.22"
 
 # Tauri 已间接依赖 tokio，这里只是提为直接依赖以便用 try_join! 并发发起两个用量请求，
 # 不会新增编译单元。
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "time", "sync"] }
 
 # 凭据加密（M-1）。windows crate 本就是 tauri 的传递依赖（经 tao / webview2-com），
 # 这里提为直接依赖只为拿到 DPAPI（CryptProtectData / CryptUnprotectData）与
 # 缓存目录变更监听（ReadDirectoryChangesW，见 cache_watch.rs），
 # 不新增任何编译单元。仅开用到的 Win32 面，避免拖入整个表面。
 [target.'cfg(windows)'.dependencies]
+# 自启通过原生 Unicode 注册表 API 读写并精确回滚 Run 值，替代 reg.exe 子进程。
+winreg = "0.55"
+# 直接使用 WebView2 profile 的 ClearBrowsingDataAll 与完成回调，清登录数据须等待真实完成。
+webview2-com = "0.38.2"
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",

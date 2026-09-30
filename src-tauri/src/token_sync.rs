@@ -11,42 +11,66 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 /// 单文件读取上限。WebView2 的缓存文件绝大多数远小于此，设上限是为了避免
 /// 偶发的巨型文件把整个 watcher 循环卡住。
 const MAX_CACHE_FILE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_SCAN_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_SCAN_FILES: usize = 250;
+const MAX_SCAN_ENTRIES: usize = 5000;
+const MAX_SCAN_DURATION: Duration = Duration::from_millis(250);
 
 /// 以共享方式读取一个可能正被 WebView2 占用的文件。
 ///
 /// Windows 上 WebView2 以独占写句柄持有缓存文件，普通 `fs::read` 会拿到
 /// 「另一个程序正在使用此文件」。这里用 `share_mode` 显式允许读写删除共享，
 /// 拿到快照即可；读到的内容不完整也无妨，解析函数会自行判断。
-#[cfg(windows)]
 pub fn read_shared_text(path: &Path) -> Option<String> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(0x1 | 0x2 | 0x4)
-        .open(path)
-        .ok()?;
+    read_shared_text_while(path, MAX_CACHE_FILE_BYTES, &mut || true)
+}
+
+fn read_shared_text_while(
+    path: &Path,
+    reserved_bytes: u64,
+    keep_scanning: &mut impl FnMut() -> bool,
+) -> Option<String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    options.share_mode(0x1 | 0x2 | 0x4);
+    let mut file = options.open(path).ok()?;
     let metadata = file.metadata().ok()?;
-    if metadata.len() == 0 || metadata.len() > MAX_CACHE_FILE_BYTES {
+    if metadata.len() == 0
+        || metadata.len() > MAX_CACHE_FILE_BYTES
+        || metadata.len() > reserved_bytes
+    {
         return None;
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut bytes).ok()?;
-    // 缓存文件里夹着 NUL 填充，先剔掉再交给字符串匹配
-    Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
-}
-
-/// 非 Windows：无 WebView2 共享句柄语义，直接整读。
-#[cfg(not(windows))]
-pub fn read_shared_text(path: &Path) -> Option<String> {
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.len() == 0 || metadata.len() > MAX_CACHE_FILE_BYTES {
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        if !keep_scanning() {
+            return None;
+        }
+        let remaining = metadata.len().saturating_sub(bytes.len() as u64);
+        if remaining == 0 {
+            break;
+        }
+        let count = file
+            .read(&mut chunk[..remaining.min(64 * 1024) as usize])
+            .ok()?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+    // 不追读增长中的尾部，实际读取量始终不超过已预留的预算；后续遍历再试。
+    if file.metadata().ok()?.len() > metadata.len() {
         return None;
     }
-    let bytes = fs::read(path).ok()?;
+    // 缓存文件里夹着 NUL 填充，先剔掉再交给字符串匹配
     Some(String::from_utf8_lossy(&bytes).replace('\0', ""))
 }
 
@@ -67,7 +91,10 @@ pub fn extract_user_api_tokens(text: &str) -> Vec<String> {
         };
         let token_end = token_start + close_quote;
         let token = &text[token_start..token_end];
-        let context_end = (token_end + 1800).min(text.len());
+        let mut context_end = (token_end + 1800).min(text.len());
+        while !text.is_char_boundary(context_end) {
+            context_end -= 1;
+        }
         let context = &text[token_end..context_end];
         if token.len() > 20
             && context.contains("\"id_profile\"")
@@ -99,6 +126,9 @@ pub struct CacheScanState {
     seen: HashMap<PathBuf, (Stamp, u64)>,
     order: VecDeque<(PathBuf, u64)>,
     next_generation: u64,
+    // 保存枚举位置，预算耗尽后下一轮继续，避免总从目录开头扫而饿死后部文件。
+    entries: Option<fs::ReadDir>,
+    pending_entry: Option<fs::DirEntry>,
 }
 
 /// 表项内容指纹：文件大小 + 修改时间。
@@ -191,28 +221,64 @@ pub struct CachedCandidate {
     pub stamp: Stamp,
 }
 
-/// 收集缓存目录里全部通过上下文校验的候选 token（按文件遍历顺序，按值去重）。
+/// 分轮收集缓存目录里通过上下文校验的候选 token（按文件遍历顺序，轮内按值去重）。
 ///
 /// 「收集」与「验证」分离（评审 F-25）：本函数只负责收集，token 的网络验证由
 /// 调用方在扫描完成后统一进行——单个候选的验证（HTTP 超时上限 15s）不再卡住
 /// 其余文件的扫描。
 ///
 /// 已读标记的语义（评审 F-07 实测加固）：
-/// - 无候选、不可读、或 token 均为已知重复的文件 → 立即记入 `seen`；
+/// - 无候选、超出单文件上限、或 token 均为已知重复的文件 → 立即记入 `seen`；
+/// - 不可读、增长中或因取消中止的文件 → 不标记，后续遍历重新尝试；
 /// - 产出新候选的文件**暂不标记**，由验证方决定：明确拒绝（401/403）才回写
 ///   标记；瞬时失败（网络/服务端）保持未标记，下一轮自动重试——否则一次
 ///   网络抖动就会把有效 Token 静默压制到文件内容变化为止。
 pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<CachedCandidate> {
-    let mut candidates: Vec<CachedCandidate> = Vec::new();
+    collect_webview_cached_usage_tokens_while(scan, || true)
+}
+
+pub fn collect_webview_cached_usage_tokens_while(
+    scan: &mut CacheScanState,
+    keep_scanning: impl FnMut() -> bool,
+) -> Vec<CachedCandidate> {
     let Some(cache_dir) = webview_cache_dir() else {
-        return candidates;
+        return Vec::new();
     };
-    let Ok(entries) = fs::read_dir(cache_dir) else {
-        return candidates;
+    collect_cached_usage_tokens_in(scan, &cache_dir, keep_scanning)
+}
+
+fn collect_cached_usage_tokens_in(
+    scan: &mut CacheScanState,
+    cache_dir: &Path,
+    mut keep_scanning: impl FnMut() -> bool,
+) -> Vec<CachedCandidate> {
+    let mut candidates: Vec<CachedCandidate> = Vec::new();
+    let mut entries = match scan.entries.take().or_else(|| fs::read_dir(cache_dir).ok()) {
+        Some(entries) => entries,
+        None => return candidates,
     };
     let mut read_files = 0usize;
+    let mut read_bytes = 0u64;
+    let mut visited_entries = 0usize;
+    let start = Instant::now();
     let mut known_tokens = std::collections::HashSet::new();
-    for entry in entries.flatten() {
+    loop {
+        if !keep_scanning()
+            || read_files >= MAX_SCAN_FILES
+            || visited_entries >= MAX_SCAN_ENTRIES
+            || start.elapsed() >= MAX_SCAN_DURATION
+        {
+            scan.entries = Some(entries);
+            break;
+        }
+        let Some(entry) = scan
+            .pending_entry
+            .take()
+            .or_else(|| entries.find_map(Result::ok))
+        else {
+            break;
+        };
+        visited_entries += 1;
         let path = entry.path();
         // 取一次元数据同时完成「是否普通文件」与「是否变动」两项判断，比 is_file()
         // 后再取一次少一次系统调用。
@@ -234,22 +300,45 @@ pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<Cac
             // 上次已经读过且文件未变动，跳过整读
             continue;
         }
-        let Some(text) = read_shared_text(&path) else {
+        if metadata.len() == 0 || metadata.len() > MAX_CACHE_FILE_BYTES {
             mark_seen(scan, path, stamp);
             continue;
-        };
+        }
+        if read_bytes + metadata.len() > MAX_SCAN_BYTES {
+            scan.pending_entry = Some(entry);
+            scan.entries = Some(entries);
+            break;
+        }
+        read_bytes += metadata.len();
         read_files += 1;
-        // 每个文件只取第一个新 token 作为候选；候选文件留给验证方标记
-        let new_token = extract_user_api_tokens(&text)
+        let Some(text) = read_shared_text_while(&path, metadata.len(), &mut keep_scanning) else {
+            if !keep_scanning() {
+                scan.pending_entry = Some(entry);
+                scan.entries = Some(entries);
+                break;
+            }
+            // 不标记读取失败或增长中的文件，下一次完整遍历时重新尝试。
+            continue;
+        };
+        // 同一个缓存文件可能同时保留旧会话与新会话，不能只试第一个。
+        let new_tokens: Vec<_> = extract_user_api_tokens(&text)
             .into_iter()
-            .find(|token| known_tokens.insert(token.clone()));
-        match new_token {
-            Some(token) => candidates.push(CachedCandidate { token, path, stamp }),
-            None => mark_seen(scan, path, stamp),
+            .filter(|token| known_tokens.insert(token.clone()))
+            .collect();
+        if new_tokens.is_empty() {
+            mark_seen(scan, path, stamp);
+        } else {
+            for token in new_tokens {
+                candidates.push(CachedCandidate {
+                    token,
+                    path: path.clone(),
+                    stamp,
+                });
+            }
         }
     }
     log::debug!(
-        "缓存扫描：读取 {read_files} 个新/变更文件，候选 token {} 个",
+        "缓存扫描：读取 {read_files} 个新/变更文件、{read_bytes} 字节，候选 token {} 个",
         candidates.len()
     );
     candidates
@@ -259,6 +348,124 @@ pub fn collect_webview_cached_usage_tokens(scan: &mut CacheScanState) -> Vec<Cac
 mod tests {
     use super::*;
     use crate::test_support::TempConfigDir;
+
+    #[test]
+    fn 分轮文件预算保留游标_后部候选不会饿死() {
+        let dir = TempConfigDir::new("scan-file-budget");
+        for i in 0..520 {
+            fs::write(
+                dir.path().join(format!("f_{i:04}")),
+                cache_text_with(&format!("synthetic-session-token-{i:04}")),
+            )
+            .unwrap();
+        }
+        let mut scan = CacheScanState::default();
+        let mut found = std::collections::HashSet::new();
+        for _ in 0..20 {
+            let batch = collect_cached_usage_tokens_in(&mut scan, dir.path(), || true);
+            assert!(batch.len() <= MAX_SCAN_FILES);
+            found.extend(batch.into_iter().map(|candidate| candidate.token));
+            if found.len() == 520 {
+                break;
+            }
+        }
+        assert_eq!(found.len(), 520);
+    }
+
+    #[test]
+    fn 总读取预算耗尽后继续_不丢待处理文件() {
+        let dir = TempConfigDir::new("scan-byte-budget");
+        for i in 0..5 {
+            let mut bytes =
+                cache_text_with(&format!("synthetic-large-session-token-{i}")).into_bytes();
+            bytes.resize(8 * 1024 * 1024, b'x');
+            fs::write(dir.path().join(format!("f_{i}")), bytes).unwrap();
+        }
+        let mut scan = CacheScanState::default();
+        let mut found = std::collections::HashSet::new();
+        for _ in 0..10 {
+            let batch = collect_cached_usage_tokens_in(&mut scan, dir.path(), || true);
+            assert!(batch.len() <= 4, "每轮最多读取32 MiB");
+            found.extend(batch.into_iter().map(|candidate| candidate.token));
+            if found.len() == 5 {
+                break;
+            }
+        }
+        assert_eq!(found.len(), 5);
+    }
+
+    #[test]
+    fn 读取中取消不标记已读_下次可重新取得候选() {
+        let dir = TempConfigDir::new("scan-cancel");
+        fs::write(
+            dir.path().join("f_1"),
+            cache_text_with("synthetic-cancel-session-token-12345"),
+        )
+        .unwrap();
+        let mut scan = CacheScanState::default();
+        let mut checks = 0;
+        let found = collect_cached_usage_tokens_in(&mut scan, dir.path(), || {
+            checks += 1;
+            checks < 3
+        });
+        assert!(found.is_empty());
+        assert!(scan.seen.is_empty());
+        let resumed = collect_cached_usage_tokens_in(&mut scan, dir.path(), || true);
+        assert_eq!(resumed.len(), 1);
+    }
+
+    #[test]
+    fn 超大文件拒绝读取() {
+        let dir = TempConfigDir::new("scan-oversize");
+        let path = dir.path().join("oversize");
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_CACHE_FILE_BYTES + 1)
+            .unwrap();
+        assert!(read_shared_text(&path).is_none());
+    }
+
+    #[test]
+    fn collect_同一文件多个会话均为候选() {
+        let dir = TempConfigDir::new("collect-multiple-sessions");
+        let cache = dir
+            .path()
+            .join("com.deepseek.monitor.windows/EBWebView/Default/Cache/Cache_Data");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(
+            cache.join("f_1"),
+            format!(
+                "{}{}",
+                cache_text_with("old-synthetic-session-token-12345"),
+                cache_text_with("new-synthetic-session-token-12345")
+            ),
+        )
+        .unwrap();
+        let previous = std::env::var_os("LOCALAPPDATA");
+        std::env::set_var("LOCALAPPDATA", dir.path());
+        let found = collect_webview_cached_usage_tokens(&mut CacheScanState::default());
+        match previous {
+            Some(value) => std::env::set_var("LOCALAPPDATA", value),
+            None => std::env::remove_var("LOCALAPPDATA"),
+        }
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].path, found[1].path);
+    }
+
+    #[test]
+    fn 上下文截取_中文与emoji边界不恐慌() {
+        for character in ["界", "😀"] {
+            for padding in 0..4 {
+                let text = format!(
+                    "\"token\":\"{}\"{}{}",
+                    "a".repeat(21),
+                    "x".repeat(padding),
+                    character.repeat(700)
+                );
+                assert!(extract_user_api_tokens(&text).is_empty());
+            }
+        }
+    }
 
     /// 构造一段带完整登录态上下文的缓存文本
     fn cache_text_with(token: &str) -> String {

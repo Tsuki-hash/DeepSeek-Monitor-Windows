@@ -1,4 +1,17 @@
-# DeepSeek Monitor Windows
+<div align="center">
+  <img src="public/assets/deepseek-color.png" width="64" height="64" alt="DeepSeek Monitor icon" />
+  <h1>DeepSeek Monitor Windows</h1>
+  <p>
+    <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-2563eb?style=flat-square" alt="Windows 10 / 11" />
+    <img src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square" alt="Tauri 2" />
+    <img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="MIT License" />
+  </p>
+  <p>
+    <a href="https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest">下载安装</a> ·
+    <a href="https://github.com/Tsuki-hash/DeepSeekMonitorWin/issues">反馈问题</a> ·
+    <a href="README.md">简体中文</a> / <a href="README_EN.md">English</a>
+  </p>
+</div>
 
 把 DeepSeek 的余额和用量钉在 Windows 托盘上的小面板。点一下图标，就能看到还剩多少钱、今天花了多少、这个月花了多少，以及每个模型的 Token 和缓存命中情况。
 
@@ -12,7 +25,14 @@
 | :---: | :---: |
 | <img src="screenshots/dashboard-dark.png" width="330" alt="DeepSeek Monitor Windows 深色皮肤主面板"> | <img src="screenshots/dashboard-light.png" width="330" alt="DeepSeek Monitor Windows 浅色皮肤主面板"> |
 
-*上图均为演示数据，非真实账户。*
+<details>
+<summary>查看模型详情</summary>
+
+<img src="screenshots/detail-dark.png" width="330" alt="模型详情：本月指标与最近七日趋势">
+
+</details>
+
+*以上界面为本地 1.3.0 待发布版本的演示数据，非真实账户；最终模型显示名仍待上线核对。*
 
 ## 为什么会有这个项目
 
@@ -28,7 +48,7 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 ### 安装
 
-从 [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest) 下载 `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
+从 [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest) 下载最新已发布版本的 `x64-setup.exe` 安装。覆盖安装不需要先卸载旧版本。
 
 运行环境：Windows 10 或 Windows 11，以及 Microsoft Edge WebView2 Runtime（Windows 11 自带，Windows 10 若缺失需单独安装）。
 
@@ -45,6 +65,9 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 - 点窗口右上角的关闭按钮 = **隐藏到托盘**，不是退出。
 - 左键托盘图标：显示 / 隐藏面板。
 - 右键托盘图标：显示主面板 / 退出。
+- 模型行显示本月用量，趋势图显示包含今天的近7日；记账时区为东八区。
+- 余额与用量各有更新时间，按电脑本地时区显示；网络更新失败会保留最近成功数据，并可查看原因、重试或重新同步。
+- 图表可指向预览、点击固定明细；键盘 Tab 选择日期，Enter / Space 固定，Esc 收起。数据明细显示在图表下方。
 
 ## 两种凭据，别混
 
@@ -64,7 +87,7 @@ DeepSeek 官方只开放了余额接口，没有账户级的用量接口。网�
 
 应用会 hook 页面发出的网络请求，直接从 `Authorization` 头里抓取 Bearer token，验证它确实能调通用量接口之后才保存，然后自动刷新数据。
 
-> 登录需要时间，页面登录完成后才会发请求。如果点了没反应，把登录窗口关掉再点一次按钮即可（等待期间按钮显示「等待登录」）。
+> 登录需要时间，等待期间可点「取消同步」。验证成功后才保存 Token；取消后旧请求不能重新保存凭据。
 
 ### 方式二：手动粘贴（兜底）
 
@@ -133,7 +156,7 @@ API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**�
 - 把 `config.json` 单独拷到别的机器或别的用户下，凭据**解不开**，应用会提示重新填写（其余设置原样保留）。
 - 旧版本（v1.2.1 及更早）留下的明文凭据，在应用首次读取时**自动加密回写**，无需手工处理。
 - 仍然不要把它提交到任何仓库、分享或备份到云盘——加密只防「文件被顺手拿走」，不防「当前用户下的恶意进程」。
-- 在共享电脑上用完，去设置页点 **清除 Key** 和 **清除 Token**。
+- 在共享电脑上用完，可在设置页清除 Key，并在「账户隐私」中点「退出并忘记账户」清除用量 Token 和本应用的网页登录数据。仅「清除 Token」不会删除网页登录缓存。
 
 网页登录产生的 WebView2 缓存位于 `%LOCALAPPDATA%\com.deepseek.monitor.windows\EBWebView`，属于本机运行数据，同样不应提交到仓库。
 
@@ -141,9 +164,11 @@ API Key 和用量 Token 存在这个文件里，**已用 Windows DPAPI 加密**�
 
 ### 环境要求
 
-- Node.js 22+ 与 npm（单测使用 `node --test --experimental-strip-types`）
-- Rust 1.77.2+，建议 MSVC 工具链
+- Node.js 22.6+ 与 npm（单测使用 `node --test --experimental-strip-types`）
+- Rust 1.88+，建议 MSVC 工具链
 - Visual Studio Build Tools 2022，勾选 `Desktop development with C++`
+
+最低版本已在 Windows MSVC 环境验证：Node.js 22.6.0（npm 10.8.2）通过前端测试和构建，Rust 1.88.0 通过后端构建和测试。
 
 ### 常用命令
 
@@ -209,7 +234,7 @@ DeepSeekMonitorWin/
 └── screenshots/                 # README 界面截图
 ```
 
-界面是一个单文件（`main.tsx` + `styles.css`），后端按职责分成了几个小模块但都不大。模型名到界面行的映射集中在 `src-tauri/src/usage.rs` 的 `model_slot()`，改模型或加模型从那里入手——它旁边就是覆盖四类模型名的测试，改完立刻能验证。
+界面由 `App.tsx`、`components/` 和共享样式组成，后端按配置、网络、统计、同步和托盘职责拆分。模型名到界面行的映射集中在 `src-tauri/src/usage.rs` 的 `model_slot()`，改模型或加模型从那里入手——它旁边就是覆盖四类模型名的测试，改完立刻能验证。
 
 ## 常见问题
 

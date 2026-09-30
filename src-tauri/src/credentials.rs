@@ -10,11 +10,10 @@
 //! 3. **凭据绑定当前用户 + 机器**，这正是我们要的威胁模型：防的是网盘同步、
 //!    终端管理采集、恶意脚本批量读取，而不是本机同用户下的提权。
 //!
-//! 密文以 base64 存放，字段旁的 `credentials_encrypted` 标记表明当前格式，
+//! 密文以带 DSM1 前缀的 base64 存放，
 //! 迁移靠 `CONFIG_SCHEMA_VERSION` 区分（见 `config.rs` 的读写路径）。
 //!
-//! 非 Windows 平台（以及 DPAPI 调用失败时）回退为明文，保证功能可用性优先于保密性：
-//! 解密失败的后果是用户重填一次凭据，而不是应用打不开。
+//! 加密失败时拒绝写入凭据，保留旧配置；解密失败则提示重新配置。
 
 use base64::Engine;
 
@@ -25,7 +24,7 @@ const CIPHER_PREFIX: &str = "DSM1:";
 
 /// 加密一个凭据字段。返回带前缀的 base64 密文。
 ///
-/// 失败时返回 `None`，由调用方决定回退策略（当前策略：明文存储 + 打 warn 日志）。
+/// 失败时返回 `None`，调用方拒绝保存，禁止回退明文。
 pub fn encrypt(plaintext: &str) -> Option<String> {
     let cipher = platform::protect(plaintext.as_bytes())?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(&cipher);

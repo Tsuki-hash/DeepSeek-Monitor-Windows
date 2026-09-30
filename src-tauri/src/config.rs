@@ -118,6 +118,8 @@ pub fn default_refresh_interval_seconds() -> u64 {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct StoredConfig {
+    #[serde(skip)]
+    pub config_warnings: Vec<String>,
     // 放在首位，便于人工查看 config.json 时一眼看到格式版本
     #[serde(default)]
     pub version: u32,
@@ -150,6 +152,7 @@ impl StoredConfig {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    pub config_warnings: Vec<String>,
     pub api_key_configured: bool,
     pub api_key_preview: Option<String>,
     pub usage_token_configured: bool,
@@ -215,6 +218,9 @@ fn read_stored_config_unlocked() -> Result<StoredConfig, String> {
         // 已持有 config_io_lock，必须走 unlocked 写，避免自锁。
         if let Err(error) = write_stored_config_unlocked(&config) {
             log::warn!("凭据加密迁移回写失败（本次读取不受影响）：{error}");
+            config
+                .config_warnings
+                .push("旧配置凭据尚未成功加密，请检查 Windows 加密服务并重新保存".into());
         }
     }
 
@@ -246,6 +252,9 @@ fn decrypt_credentials(config: &mut StoredConfig) -> bool {
             Some(Err(error)) => {
                 log::warn!("凭据解密失败，已清空该字段等待用户重填：{error}");
                 *field = None;
+                config
+                    .config_warnings
+                    .push("本机无法解密旧凭据，请重新填写".into());
             }
             // is_ciphertext 为真时 decrypt 必然返回 Some
             None => *field = None,
@@ -256,6 +265,13 @@ fn decrypt_credentials(config: &mut StoredConfig) -> bool {
 
 /// 原地加密配置里的凭据字段。已是密文的跳过，避免重复加密。
 fn encrypt_credentials(config: &mut StoredConfig) -> Result<(), String> {
+    encrypt_credentials_with(config, credentials::encrypt)
+}
+
+fn encrypt_credentials_with(
+    config: &mut StoredConfig,
+    encrypt: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
     for field in [&mut config.api_key, &mut config.usage_token] {
         let Some(plain) = field.as_ref() else {
             continue;
@@ -263,12 +279,10 @@ fn encrypt_credentials(config: &mut StoredConfig) -> Result<(), String> {
         if plain.is_empty() || credentials::is_ciphertext(plain) {
             continue;
         }
-        match credentials::encrypt(plain) {
+        match encrypt(plain) {
             Some(cipher) => *field = Some(cipher),
             None => {
-                // DPAPI 不可用（非 Windows 或调用失败）：明文落盘但告警。
-                // 不硬失败——否则整个保存动作会失败，用户连改个刷新间隔都做不到。
-                log::warn!("凭据加密不可用，本次以明文写入");
+                return Err("无法安全保存凭据：Windows 加密服务不可用，原配置未被覆盖".to_string());
             }
         }
     }
@@ -311,13 +325,20 @@ pub fn write_stored_config(config: &StoredConfig) -> Result<(), String> {
 }
 
 fn write_stored_config_unlocked(config: &StoredConfig) -> Result<(), String> {
+    write_stored_config_with(config, encrypt_credentials)
+}
+
+fn write_stored_config_with(
+    config: &StoredConfig,
+    encrypt: impl FnOnce(&mut StoredConfig) -> Result<(), String>,
+) -> Result<(), String> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
     let mut to_write = config.clone();
-    encrypt_credentials(&mut to_write)?;
+    encrypt(&mut to_write)?;
     to_write.version = CONFIG_SCHEMA_VERSION;
 
     let text = serde_json::to_string_pretty(&to_write).map_err(|error| error.to_string())?;
@@ -366,6 +387,7 @@ pub fn to_app_config(config: StoredConfig) -> Result<AppConfig, String> {
         .unwrap_or(false);
 
     Ok(AppConfig {
+        config_warnings: config.config_warnings,
         api_key_configured: api_key_preview.is_some(),
         api_key_preview,
         usage_token_configured,
@@ -380,6 +402,20 @@ pub fn to_app_config(config: StoredConfig) -> Result<AppConfig, String> {
 mod tests {
     use super::*;
     use crate::test_support::TempConfigDir;
+
+    #[test]
+    fn 加密失败拒绝序列化_不改变旧配置文件() {
+        let dir = TempConfigDir::new("encryption-failure");
+        let path = dir.path().join("config.json");
+        fs::write(&path, "old-ciphertext-file").unwrap();
+        let mut config = StoredConfig::with_defaults();
+        config.api_key = Some("synthetic-secret".into());
+        assert!(
+            write_stored_config_with(&config, |c| encrypt_credentials_with(c, |_| None)).is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old-ciphertext-file");
+        assert!(!path.with_extension("json.tmp").exists());
+    }
 
     #[test]
     fn 缺字段的旧配置_反序列化_走默认值() {
@@ -460,6 +496,7 @@ mod tests {
         let dir = TempConfigDir::new("write_stamp");
         let config = StoredConfig {
             version: 0,
+            config_warnings: vec![],
             api_key: Some("sk-test".to_string()),
             usage_token: None,
             refresh_interval_seconds: 300,
@@ -488,6 +525,7 @@ mod tests {
         let _dir = TempConfigDir::new("write_roundtrip");
         let config = StoredConfig {
             version: CONFIG_SCHEMA_VERSION,
+            config_warnings: vec![],
             api_key: Some("sk-roundtrip-key-value".to_string()),
             usage_token: Some("usage-token-value".to_string()),
             refresh_interval_seconds: 3600,

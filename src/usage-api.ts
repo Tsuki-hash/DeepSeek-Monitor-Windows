@@ -1,28 +1,51 @@
 import { invoke } from "@tauri-apps/api/core";
-import { addDays, previousMonth } from "./format";
+import { todayStr } from "./format";
 import type { UsageResult } from "./types";
+import { RequestGate } from "./request-gate";
+
+const usageGate = new RequestGate<UsageResult>();
+export const invalidateUsageRequests = () => usageGate.invalidate();
 
 export const fetchMonthUsage = (month: number, year: number) => {
   return invoke<UsageResult>("fetch_usage", { month, year });
 };
-export const fetchCurrentUsage = async () => {
-  const now = new Date();
-  const current = await fetchMonthUsage(now.getMonth() + 1, now.getFullYear());
-  const needsPreviousMonth = addDays(now, -6).getMonth() !== now.getMonth();
-  if (!needsPreviousMonth) {
-    return current;
-  }
-  try {
-    const previous = previousMonth(now);
-    const previousUsage = await fetchMonthUsage(previous.month, previous.year);
-    return {
-      ...current,
-      days: [...previousUsage.days, ...current.days],
-    };
-  } catch {
-    return current;
-  }
-};
+export const fetchCurrentUsage = () =>
+  usageGate.run(async () => {
+    const date = todayStr();
+    const [year, month, day] = date.split("-").map(Number);
+    const current = await fetchMonthUsage(month, year);
+    const needsPreviousMonth = day <= 6;
+    if (!needsPreviousMonth) {
+      return current;
+    }
+    try {
+      const previous =
+        month === 1
+          ? { month: 12, year: year - 1 }
+          : { month: month - 1, year };
+      const previousUsage = await fetchMonthUsage(
+        previous.month,
+        previous.year,
+      );
+      return {
+        ...current,
+        days: [...previousUsage.days, ...current.days],
+      };
+    } catch {
+      const now = new Date(`${date}T00:00:00Z`);
+      const unavailableDates = Array.from({ length: 7 }, (_, i) =>
+        new Date(now.getTime() - i * 86400_000).toISOString().slice(0, 10),
+      ).filter((d) => d.slice(0, 7) !== date.slice(0, 7));
+      return {
+        ...current,
+        unavailableDates,
+        warnings: [
+          ...(current.warnings ?? []),
+          "上月数据暂未获取，缺失日期标为未知",
+        ],
+      };
+    }
+  });
 
 export const refreshOptions = [
   { label: "1 分钟", value: 60 },

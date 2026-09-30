@@ -10,22 +10,32 @@ import type {
   ViewName,
 } from "./types";
 import { nextLoadStateAfterError } from "./format";
-import { fetchCurrentUsage } from "./usage-api";
+import { fetchCurrentUsage, invalidateUsageRequests } from "./usage-api";
+import { RequestGate } from "./request-gate";
+import { errorInfo } from "./error-state";
+import { THEME_STORAGE_KEY, THEME_MIGRATION_KEY, THEME_ATTR } from "./theme";
 import { DashboardPanel } from "./components/DashboardPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ModelDetailPanel } from "./components/ModelDetailPanel";
 
 function App() {
+  const [showDataNotices, setShowDataNotices] = React.useState(false);
   const [view, setView] = React.useState<ViewName>("dashboard");
   const [model, setModel] = React.useState<ModelName>("flash");
 
   const [balance, setBalance] = React.useState<BalanceData | null>(null);
   const [balanceState, setBalanceState] = React.useState<LoadState>("loading");
   const [balanceError, setBalanceError] = React.useState("");
+  const [balanceUpdatedAt, setBalanceUpdatedAt] = React.useState<number | null>(
+    null,
+  );
 
   const [usage, setUsage] = React.useState<UsageResult | null>(null);
   const [usageState, setUsageState] = React.useState<LoadState>("loading");
   const [usageError, setUsageError] = React.useState("");
+  const [usageUpdatedAt, setUsageUpdatedAt] = React.useState<number | null>(
+    null,
+  );
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] =
     React.useState(60);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = React.useState(false);
@@ -36,6 +46,9 @@ function App() {
   // 请求守卫（评审 F-26）：手动刷新 / 自动刷新 / 托盘唤出三条路径可能并发，
   // 慢的旧响应（HTTP 超时上限 15s）不允许覆盖新响应，只接受各自最新一次的结果。
   const balanceRequestId = React.useRef(0);
+  const availableSnapshot = React.useRef({ balance: false, usage: false });
+  const failures = React.useRef({ balance: 0, usage: 0 });
+  const balanceGate = React.useRef(new RequestGate<BalanceData>());
   const loadBalance = React.useCallback((silent = false) => {
     const requestId = ++balanceRequestId.current;
     if (silent) {
@@ -43,21 +56,36 @@ function App() {
     } else {
       setBalanceState("loading");
     }
-    void invoke<BalanceData>("fetch_balance")
+    return balanceGate.current
+      .run(() => invoke<BalanceData>("fetch_balance"))
       .then((data) => {
         if (requestId !== balanceRequestId.current) {
           return;
         }
+        availableSnapshot.current.balance = true;
         setBalance(data);
+        setBalanceUpdatedAt(Date.now());
+        failures.current.balance = 0;
         setBalanceState("ok");
+        setBalanceError("");
       })
       .catch((error) => {
         if (requestId !== balanceRequestId.current) {
           return;
         }
-        const message = typeof error === "string" ? error : "查询失败";
+        const { message, code } = errorInfo(error);
+        failures.current.balance += 1;
         setBalanceError(message);
-        setBalanceState(message.includes("未配置") ? "nokey" : "error");
+        setBalanceState((prev) =>
+          nextLoadStateAfterError(
+            availableSnapshot.current.balance ? "ok" : prev,
+            availableSnapshot.current.balance &&
+              code !== "not_configured" &&
+              code !== "credentials_invalid",
+            message,
+            code,
+          ),
+        );
       });
   }, []);
 
@@ -69,12 +97,15 @@ function App() {
     } else {
       setUsageState("loading");
     }
-    void fetchCurrentUsage()
+    return fetchCurrentUsage()
       .then((data) => {
         if (requestId !== usageRequestId.current) {
           return;
         }
+        availableSnapshot.current.usage = true;
         setUsage(data);
+        setUsageUpdatedAt(Date.now());
+        failures.current.usage = 0;
         setUsageState("ok");
         setUsageError("");
       })
@@ -82,20 +113,30 @@ function App() {
         if (requestId !== usageRequestId.current) {
           return;
         }
-        const message = typeof error === "string" ? error : "查询失败";
+        const { message, code } = errorInfo(error);
+        failures.current.usage += 1;
         setUsageError(message);
-        // 静默刷新失败时保留上一份可用快照，避免网络抖动把面板打回「查询失败」
-        if (!silent) {
+        if (code === "credentials_invalid" || code === "not_configured") {
+          availableSnapshot.current.usage = false;
           setUsage(null);
         }
-        setUsageState((prev) => nextLoadStateAfterError(prev, silent, message));
+        // 同一凭据下刷新失败保留快照与时间；无凭据或失效凭据仍显示对应错误。
+        setUsageState((prev) =>
+          nextLoadStateAfterError(
+            availableSnapshot.current.usage ? "ok" : prev,
+            availableSnapshot.current.usage &&
+              code !== "not_configured" &&
+              code !== "credentials_invalid",
+            message,
+            code,
+          ),
+        );
       });
   }, []);
 
   const refreshAll = React.useCallback(
     (silent = false) => {
-      loadBalance(silent);
-      loadUsage(silent);
+      return Promise.all([loadBalance(silent), loadUsage(silent)]);
     },
     [loadBalance, loadUsage],
   );
@@ -121,9 +162,6 @@ function App() {
   // （见 lib.rs 的 EVENT_MAIN_WINDOW_SHOWN / EVENT_MAIN_WINDOW_HIDDEN），
   // 这样从托盘唤出、托盘左键切换、程序内点关闭三条路径都覆盖得到。
   const [windowVisible, setWindowVisible] = React.useState(true);
-  // 托盘唤出时 +1，作为 stage 的 key 重挂载当前视图，重放面板入场动画。
-  // 数据状态都在 App 手里，重挂载不丢数据，只重置图表悬停这类瞬态。
-  const [showEpoch, setShowEpoch] = React.useState(0);
   // 首帧后按实际窗口可见性校正，避免启动时若已在托盘仍多跑一轮刷新
   React.useEffect(() => {
     void invoke<boolean>("is_main_window_visible")
@@ -134,7 +172,6 @@ function App() {
   React.useEffect(() => {
     const shown = listen("main-window-shown", () => {
       setWindowVisible(true);
-      setShowEpoch((epoch) => epoch + 1);
       // 面板被唤出即拉最新数据，避免托盘唤出后看到的是旧快照。
       // 走静默刷新：唤出瞬间面板上已有上一轮的数据，不该闪一下「查询中…」。
       refreshAll(true);
@@ -158,13 +195,25 @@ function App() {
     let cancelled = false;
     let timer = 0;
     const schedule = () => {
-      timer = window.setTimeout(() => {
-        if (cancelled) {
-          return;
-        }
-        refreshAll(true);
-        schedule();
-      }, refreshIntervalSeconds * 1000);
+      timer = window.setTimeout(
+        () => {
+          if (cancelled) {
+            return;
+          }
+          void refreshAll(true).finally(() => {
+            if (!cancelled) schedule();
+          });
+        },
+        Math.min(
+          3600,
+          refreshIntervalSeconds *
+            2 **
+              Math.min(
+                6,
+                Math.max(failures.current.balance, failures.current.usage),
+              ),
+        ) * 1000,
+      );
     };
     schedule();
     return () => {
@@ -179,10 +228,48 @@ function App() {
     });
   }, []);
 
+  // 无论设置页是否挂载，登录同步成功都使旧凭据响应失效并刷新主数据。
+  React.useEffect(() => {
+    const captured = listen("usage-token-captured", () => {
+      usageRequestId.current += 1;
+      invalidateUsageRequests();
+      availableSnapshot.current.usage = false;
+      setUsage(null);
+      setUsageUpdatedAt(null);
+      void loadUsage();
+    });
+    const cleared = listen("usage-token-cleared", () => {
+      usageRequestId.current += 1;
+      invalidateUsageRequests();
+      availableSnapshot.current.usage = false;
+      setUsage(null);
+      setUsageUpdatedAt(null);
+      setUsageState("nokey");
+      setUsageError("未配置用量 Token");
+    });
+    const browsingCleared = listen("browsing-data-cleared", () => {
+      const current = document.documentElement.getAttribute(THEME_ATTR);
+      localStorage.setItem(
+        THEME_STORAGE_KEY,
+        current === "dark" ? "dark" : "light",
+      );
+      localStorage.setItem(THEME_MIGRATION_KEY, "1");
+    });
+    return () => {
+      void captured.then((unlisten) => unlisten()).catch(() => undefined);
+      void cleared.then((unlisten) => unlisten()).catch(() => undefined);
+      void browsingCleared
+        .then((unlisten) => unlisten())
+        .catch(() => undefined);
+    };
+  }, [loadUsage]);
+
   return (
-    <div className="stage" key={showEpoch}>
+    <div className="stage">
       {view === "dashboard" && (
         <DashboardPanel
+          balanceUpdatedAt={balanceUpdatedAt}
+          usageUpdatedAt={usageUpdatedAt}
           balance={balance}
           balanceState={balanceState}
           balanceError={balanceError}
@@ -191,7 +278,14 @@ function App() {
           usageError={usageError}
           onRefresh={() => refreshAll()}
           onClose={hideWindow}
-          onSettings={() => setView("settings")}
+          onSettings={() => {
+            setShowDataNotices(false);
+            setView("settings");
+          }}
+          onDataStatus={() => {
+            setShowDataNotices(true);
+            setView("settings");
+          }}
           onDetail={(nextModel) => {
             setModel(nextModel);
             setView("detail");
@@ -200,16 +294,47 @@ function App() {
       )}
       {view === "settings" && (
         <SettingsPanel
+          onRetry={() => refreshAll(true)}
+          balanceUpdatedAt={balanceUpdatedAt}
+          usageUpdatedAt={usageUpdatedAt}
+          balanceError={balanceError}
+          usageError={usageError}
+          showDataNotices={showDataNotices}
+          usage={usage}
+          onBalanceLoaded={(nextBalance) => {
+            balanceRequestId.current += 1;
+            balanceGate.current.invalidate();
+            availableSnapshot.current.balance = true;
+            setBalance(nextBalance);
+            setBalanceUpdatedAt(Date.now());
+            setBalanceState("ok");
+            setBalanceError("");
+          }}
+          onBalanceCleared={() => {
+            balanceRequestId.current += 1;
+            balanceGate.current.invalidate();
+            availableSnapshot.current.balance = false;
+            setBalance(null);
+            setBalanceUpdatedAt(null);
+            setBalanceState("nokey");
+            setBalanceError("");
+          }}
           onUsageLoaded={(nextUsage) => {
             // 设置页的刷新代表更新的意图：作废 App 侧在途的旧请求，
             // 避免慢响应返回后把设置页刚拿到的数据覆盖掉
             usageRequestId.current += 1;
+            availableSnapshot.current.usage = true;
             setUsage(nextUsage);
+            setUsageUpdatedAt(Date.now());
             setUsageState("ok");
             setUsageError("");
           }}
           onUsageCleared={() => {
+            usageRequestId.current += 1;
+            invalidateUsageRequests();
+            availableSnapshot.current.usage = false;
             setUsage(null);
+            setUsageUpdatedAt(null);
             setUsageState("nokey");
             setUsageError("未配置用量 Token");
           }}
@@ -220,6 +345,15 @@ function App() {
       )}
       {view === "detail" && (
         <ModelDetailPanel
+          onDataStatus={() => {
+            setShowDataNotices(true);
+            setView("settings");
+          }}
+          updatedAt={usageUpdatedAt}
+          onSettings={() => {
+            setShowDataNotices(false);
+            setView("settings");
+          }}
           model={model}
           usage={usage}
           usageState={usageState}

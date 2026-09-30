@@ -9,11 +9,7 @@
 //! 不再卡住扫描循环；试调月用东八区当前月 + 上月，不再用固定历史月
 //! （平台归档旧数据后固定月会恒失败）。
 
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
-};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -21,8 +17,9 @@ use crate::cache_watch;
 use crate::config::{edit_config, to_app_config, AppConfig};
 use crate::deepseek_api::{verify_usage_token, VerifyFailure};
 use crate::sync_script::USAGE_SYNC_POLL_JS;
+use crate::sync_session::SyncSession;
 use crate::token_sync::{
-    collect_webview_cached_usage_tokens, mark_seen, webview_cache_dir, CacheScanState,
+    collect_webview_cached_usage_tokens_while, mark_seen, webview_cache_dir, CacheScanState,
     CachedCandidate,
 };
 
@@ -101,6 +98,23 @@ async fn probe_token(token: &str, probes: &[(u32, u32)]) -> ProbeOutcome {
     ProbeOutcome::Unavailable
 }
 
+async fn while_current<T>(
+    future: impl std::future::Future<Output = T>,
+    is_current: impl Fn() -> bool,
+) -> Option<T> {
+    if !is_current() {
+        return None;
+    }
+    tokio::select! {
+        _ = async {
+            while is_current() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        } => None,
+        value = future => is_current().then_some(value),
+    }
+}
+
 /// 收集到的候选逐一验证：
 /// - 通过 → 返回该 token，来源文件保持未标记（成功即同步结束，状态随之丢弃）；
 /// - 明确拒绝 → 回写已读标记，后续轮次不再弹出；
@@ -111,6 +125,7 @@ async fn probe_token(token: &str, probes: &[(u32, u32)]) -> ProbeOutcome {
 async fn verify_candidates(
     scan: &mut CacheScanState,
     candidates: Vec<CachedCandidate>,
+    is_current: impl Fn() -> bool,
 ) -> Option<String> {
     if candidates.is_empty() {
         return None;
@@ -118,14 +133,43 @@ async fn verify_candidates(
     let probes = verify_probe_months(SystemTime::now());
     let mut rejected = 0usize;
     let mut unavailable = 0usize;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut files: std::collections::HashMap<_, (crate::token_sync::Stamp, bool)> =
+        std::collections::HashMap::new();
     for candidate in candidates {
-        match probe_token(&candidate.token, &probes).await {
+        if !is_current() {
+            return None;
+        }
+        let file = files
+            .entry(candidate.path.clone())
+            .or_insert((candidate.stamp, true));
+        if Instant::now() >= deadline {
+            file.1 = false;
+            continue;
+        }
+        let outcome = while_current(
+            tokio::time::timeout(
+                deadline.saturating_duration_since(Instant::now()),
+                probe_token(&candidate.token, &probes),
+            ),
+            &is_current,
+        )
+        .await?
+        .unwrap_or(ProbeOutcome::Unavailable);
+        match outcome {
             ProbeOutcome::Passed => return Some(candidate.token),
             ProbeOutcome::Rejected => {
-                mark_seen(scan, candidate.path, candidate.stamp);
                 rejected += 1;
             }
-            ProbeOutcome::Unavailable => unavailable += 1,
+            ProbeOutcome::Unavailable => {
+                unavailable += 1;
+                file.1 = false;
+            }
+        }
+    }
+    for (path, (stamp, all_rejected)) in files {
+        if all_rejected {
+            mark_seen(scan, path, stamp);
         }
     }
     if unavailable > 0 {
@@ -140,22 +184,36 @@ async fn verify_candidates(
 }
 
 /// 收集 + 验证的完整一轮（两者分离，见 token_sync 的收集语义）。
-async fn collect_and_verify(scan: &mut CacheScanState) -> Option<String> {
-    let candidates = collect_webview_cached_usage_tokens(scan);
-    verify_candidates(scan, candidates).await
+async fn collect_and_verify(
+    scan: &mut CacheScanState,
+    app: &tauri::AppHandle,
+    generation: u64,
+) -> Option<String> {
+    let is_current = || app.state::<SyncSession>().is_current(generation);
+    let candidates = collect_webview_cached_usage_tokens_while(scan, is_current);
+    verify_candidates(scan, candidates, is_current).await
 }
 
 /// 缓存预扫描（点击同步时先跑一次）：收集候选并逐个验证，命中即返回。
 /// 收集在 spawn_blocking（同步 IO），验证是异步请求，不占 runtime 工作线程。
-pub(crate) async fn prescan_cached_token() -> Option<String> {
+pub(crate) async fn prescan_cached_token(
+    app: &tauri::AppHandle,
+    generation: u64,
+) -> Option<String> {
+    let scan_app = app.clone();
     let (candidates, mut scan) = tauri::async_runtime::spawn_blocking(move || {
         let mut scan = CacheScanState::default();
-        let candidates = collect_webview_cached_usage_tokens(&mut scan);
+        let candidates = collect_webview_cached_usage_tokens_while(&mut scan, || {
+            scan_app.state::<SyncSession>().is_current(generation)
+        });
         (candidates, scan)
     })
     .await
     .ok()?;
-    verify_candidates(&mut scan, candidates).await
+    verify_candidates(&mut scan, candidates, || {
+        app.state::<SyncSession>().is_current(generation)
+    })
+    .await
 }
 
 /// IPC 捕获路径的统一校验：与预扫描/后台 watcher 一样走东八区探针月，
@@ -177,33 +235,31 @@ pub(crate) async fn verify_token_with_probes(token: &str) -> Result<(), String> 
 pub(crate) fn capture_usage_token(
     app: &tauri::AppHandle,
     token: String,
+    generation: u64,
 ) -> Result<AppConfig, String> {
     let value = token.trim().to_string();
     if value.is_empty() {
         return Err("用量 Token 为空".to_string());
     }
-    let app_config = to_app_config(edit_config(|config| {
-        config.usage_token = Some(value);
-        Ok(())
-    })?)?;
+    app.state::<SyncSession>().commit(generation, || {
+        let app_config = to_app_config(edit_config(|config| {
+            config.usage_token = Some(value);
+            Ok(())
+        })?)?;
 
-    // 标记本次同步已成功，避免 watcher 在窗口关闭后误发"结束等待"事件
-    if let Some(flag) = app.try_state::<Arc<AtomicBool>>() {
-        flag.store(true, Ordering::SeqCst);
-    }
+        if let Some(window) = app.get_webview_window("login-sync") {
+            // 防御：确保标题不含历史 title 通道残留后再关窗
+            let _ = window.eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
+            let _ = window.close();
+        }
 
-    if let Some(window) = app.get_webview_window("login-sync") {
-        // 防御：确保标题不含历史 title 通道残留后再关窗
-        let _ = window.eval("try { document.title = 'DeepSeek 账号登录'; } catch (e) {}");
-        let _ = window.close();
-    }
-
-    let _ = app.emit("usage-token-captured", &app_config);
-    Ok(app_config)
+        let _ = app.emit("usage-token-captured", &app_config);
+        Ok(app_config)
+    })
 }
 
 /// 打开登录窗口（只允许 DeepSeek 站内导航，降低钓鱼/任意站点套壳风险）。
-pub(crate) fn open_login_window(app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) fn open_login_window(app: &tauri::AppHandle, generation: u64) -> Result<(), String> {
     let url = WebviewUrl::External("https://platform.deepseek.com".parse().unwrap());
     WebviewWindowBuilder::new(app, "login-sync", url)
         .title("DeepSeek 账号登录")
@@ -212,13 +268,18 @@ pub(crate) fn open_login_window(app: &tauri::AppHandle) -> Result<(), String> {
         .resizable(true)
         .center()
         .visible(true)
-        .initialization_script(USAGE_SYNC_POLL_JS)
+        .initialization_script(USAGE_SYNC_POLL_JS.replace(
+            "token: token",
+            &format!("token: token, generation: {generation}"),
+        ))
         .on_navigation(|nav_url| {
-            nav_url
-                .host_str()
-                .is_some_and(|host| host == "deepseek.com" || host.ends_with(".deepseek.com"))
+            nav_url.scheme() == "https"
+                && nav_url.port_or_known_default() == Some(443)
+                && nav_url
+                    .host_str()
+                    .is_some_and(|host| host == "deepseek.com" || host.ends_with(".deepseek.com"))
         })
-        .on_page_load(|window, payload| {
+        .on_page_load(move |window, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
                 && payload
                     .url()
@@ -226,7 +287,10 @@ pub(crate) fn open_login_window(app: &tauri::AppHandle) -> Result<(), String> {
                     .is_some_and(|host| host == "platform.deepseek.com")
             {
                 // 双保险：万一 initialization_script 未注入，页面加载完再装一次 hook
-                let _ = window.eval(USAGE_SYNC_POLL_JS);
+                let _ = window.eval(USAGE_SYNC_POLL_JS.replace(
+                    "token: token",
+                    &format!("token: token, generation: {generation}"),
+                ));
             }
         })
         .build()
@@ -247,21 +311,34 @@ pub(crate) fn spawn_title_watcher(app: tauri::AppHandle, generation: u64) {
         let mut change_signal = cache_dir.as_deref().and_then(cache_watch::spawn);
         let mut watch_unavailable_logged = false;
         let mut idle_rounds = 0u32;
+        let deadline = Instant::now() + Duration::from_secs(300);
         for _ in 0..MAX_WATCH_ROUNDS {
             // 新一轮同步已开始：本 watcher 作废
-            let current = app
-                .try_state::<Arc<AtomicU64>>()
-                .map(|g| g.load(Ordering::SeqCst))
-                .unwrap_or(0);
-            if current != generation {
-                log::info!("用量同步 watcher 因新一轮同步而退出（代际 {generation} → {current}）");
+            if !app.state::<SyncSession>().is_current(generation) {
                 return;
             }
-            if let Some(token) = tauri::async_runtime::block_on(collect_and_verify(&mut scan)) {
-                if let Err(error) = capture_usage_token(&app, token) {
-                    log::warn!("用量 Token 捕获后保存失败：{error}");
-                    // 前端仍处于等待态：通知其结束，避免停在旧状态
+            if Instant::now() >= deadline {
+                break;
+            }
+            if app.get_webview_window("login-sync").is_none() {
+                let _ = app.state::<SyncSession>().commit(generation, || {
                     let _ = app.emit("usage-sync-ended", ());
+                    Ok(())
+                });
+                return;
+            }
+            if let Some(token) =
+                tauri::async_runtime::block_on(collect_and_verify(&mut scan, &app, generation))
+            {
+                if !app.state::<SyncSession>().is_current(generation) {
+                    return;
+                }
+                if let Err(error) = capture_usage_token(&app, token, generation) {
+                    log::warn!("用量 Token 捕获后保存失败：{error}");
+                    let _ = app.state::<SyncSession>().commit(generation, || {
+                        let _ = app.emit("usage-sync-ended", ());
+                        Ok(())
+                    });
                 }
                 return;
             }
@@ -269,14 +346,10 @@ pub(crate) fn spawn_title_watcher(app: tauri::AppHandle, generation: u64) {
 
             let Some(window) = app.get_webview_window("login-sync") else {
                 // 窗口已关闭：若不是因成功捕获而关闭，才通知前端结束等待
-                let captured = app
-                    .try_state::<Arc<AtomicBool>>()
-                    .map(|flag| flag.load(Ordering::SeqCst))
-                    .unwrap_or(false);
-                if !captured {
-                    log::warn!("登录窗口已关闭，未捕获到用量 Token；可重试同步或改用手动粘贴");
+                let _ = app.state::<SyncSession>().commit(generation, || {
                     let _ = app.emit("usage-sync-ended", ());
-                }
+                    Ok(())
+                });
                 return;
             };
 
@@ -319,19 +392,39 @@ pub(crate) fn spawn_title_watcher(app: tauri::AppHandle, generation: u64) {
             }
         }
         log::warn!("登录同步等待超时（{MAX_WATCH_ROUNDS} 轮），未捕获到用量 Token；可重试同步或改用手动粘贴");
-        let captured = app
-            .try_state::<Arc<AtomicBool>>()
-            .map(|flag| flag.load(Ordering::SeqCst))
-            .unwrap_or(false);
-        if !captured {
+        let _ = app.state::<SyncSession>().commit(generation, || {
             let _ = app.emit("usage-sync-ended", ());
-        }
+            Ok(())
+        });
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn 取消同步中止挂起校验_无需等网络超时() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let active = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&active);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            flag.store(false, Ordering::Release);
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            while_current(std::future::pending::<()>(), || {
+                active.load(Ordering::Acquire)
+            }),
+        )
+        .await
+        .expect("取消后不能继续等30秒候选预算");
+        assert!(result.is_none());
+    }
 
     fn at(epoch_secs: i64) -> SystemTime {
         if epoch_secs >= 0 {

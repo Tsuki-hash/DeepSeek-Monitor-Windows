@@ -1,4 +1,17 @@
-# DeepSeek Monitor Windows
+<div align="center">
+  <img src="public/assets/deepseek-color.png" width="64" height="64" alt="DeepSeek Monitor icon" />
+  <h1>DeepSeek Monitor Windows</h1>
+  <p>
+    <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-2563eb?style=flat-square" alt="Windows 10 / 11" />
+    <img src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square" alt="Tauri 2" />
+    <img src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square" alt="MIT License" />
+  </p>
+  <p>
+    <a href="https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest">Download</a> ·
+    <a href="https://github.com/Tsuki-hash/DeepSeekMonitorWin/issues">Feedback</a> ·
+    <a href="README.md">简体中文</a> / <a href="README_EN.md">English</a>
+  </p>
+</div>
 
 A small panel that pins your DeepSeek balance and usage to the Windows system tray. One click on the icon shows how much credit is left, what you spent today and this month, and how each model is consuming tokens and cache.
 
@@ -12,7 +25,14 @@ Windows 10 / 11 only. Built with Tauri 2, React 18, and Rust.
 | :---: | :---: |
 | <img src="screenshots/dashboard-dark.png" width="330" alt="DeepSeek Monitor Windows dashboard, dark skin"> | <img src="screenshots/dashboard-light.png" width="330" alt="DeepSeek Monitor Windows dashboard, light skin"> |
 
-*Both screenshots use sample data, not a real account.*
+<details>
+<summary>View model details</summary>
+
+<img src="screenshots/detail-dark.png" width="330" alt="Model details: monthly metrics and the last seven days">
+
+</details>
+
+*These screenshots show the local, unreleased 1.3.0 build with sample data, not a real account. Final model names will be checked when the model launches.*
 
 ## Why this exists
 
@@ -28,7 +48,7 @@ This project combines three things:
 
 ### Install
 
-Download `DeepSeekMonitorWindows_1.2.4_x64-setup.exe` from [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest). Installing over an older version does not require uninstalling it first.
+Download the latest published `x64-setup.exe` installer from [Releases](https://github.com/Tsuki-hash/DeepSeekMonitorWin/releases/latest). Installing over an older version does not require uninstalling it first.
 
 Requirements: Windows 10 or Windows 11, plus the Microsoft Edge WebView2 Runtime (included with Windows 11; install separately on Windows 10 if missing).
 
@@ -45,6 +65,9 @@ Usage needs a second credential. See "Two credentials, don't mix them" below.
 - The close button in the top right **hides the panel to the tray**; it does not quit.
 - Left-click the tray icon: show or hide the panel.
 - Right-click the tray icon: show the dashboard, or quit.
+- Model rows show the current month; the chart shows the last seven days, including today, using UTC+8 accounting dates.
+- Balance and usage have separate update times displayed in the computer's local time zone. Network failures preserve the latest successful data, with details and retry or synchronization actions.
+- Hover to preview daily data, click to pin it, or use Tab and Enter / Space. Esc dismisses details, which appear below the chart.
 
 ## Two credentials, don't mix them
 
@@ -64,8 +87,7 @@ In the `用量同步 Token` section of Settings, click **网页登录自动同�
 
 The app hooks the network requests the page makes, reads the Bearer token straight out of the `Authorization` header, verifies that it can actually call the usage endpoint, and only then saves it and refreshes the data.
 
-> Signing in takes time; the page only issues requests once login completes. If nothing happens, close the login window and click the button again (while waiting, the button reads 等待登录).
-
+> Sign-in can take time. Use Cancel Sync to stop waiting. Tokens are saved only after validation; cancelled requests cannot save credentials later.
 ### Method 2: paste it manually (fallback)
 
 Click **方式二：手动粘贴 token** to expand. Sign in to platform.deepseek.com in a browser, press F12 to open DevTools, **switch to the Console tab**, and run at the `❯` prompt:
@@ -133,7 +155,7 @@ Both the API key and the usage token are stored in this file, **encrypted with W
 - Copying `config.json` alone to another machine or another user account makes the credentials **undecryptable**; the app then asks you to re-enter them (all other settings are preserved).
 - Plaintext credentials left behind by older versions (v1.2.1 and earlier) are **re-encrypted automatically** the first time the app reads them — no manual step needed.
 - Still do not commit it to any repository, share it, or back it up to cloud storage — encryption only guards against the file being taken, not against a malicious process running as the current user.
-- On a shared computer, clear credentials when you are done using **清除 Key** and **清除 Token** in Settings.
+- On a shared computer, clear your Key in Settings and use **退出并忘记账户** under **账户隐私** to remove the usage Token and this application's web sign-in data. **清除 Token** alone does not remove web sign-in caches.
 
 The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepseek.monitor.windows\EBWebView`. It is local runtime data and should not be committed either.
 
@@ -141,9 +163,11 @@ The WebView2 cache created by the web login lives at `%LOCALAPPDATA%\com.deepsee
 
 ### Requirements
 
-- Node.js 18+ and npm
-- Rust 1.77.2+, MSVC toolchain recommended
+- Node.js 22.6+ and npm
+- Rust 1.88+, MSVC toolchain recommended
 - Visual Studio Build Tools 2022 with `Desktop development with C++`
+
+The minimum versions have been verified on Windows MSVC: Node.js 22.6.0 with npm 10.8.2 passed frontend tests and builds; Rust 1.88.0 passed backend builds and tests.
 
 ### Commands
 
@@ -204,7 +228,7 @@ DeepSeekMonitorWin/
 └── screenshots/                 # README screenshots
 ```
 
-The UI is one file (`main.tsx` plus `styles.css`); the backend is split into a few small modules. The mapping from model name to dashboard row lives in `model_slot()` in `src-tauri/src/usage.rs` — that is where to start when changing or adding a model, and the test covering all four model names sits right next to it.
+The UI consists of `App.tsx`, `components/`, and shared styles. The backend has separate configuration, networking, aggregation, synchronization, and tray modules. The mapping from model name to dashboard row lives in `model_slot()` in `src-tauri/src/usage.rs` — that is where to start when changing or adding a model, and the test covering all four model names sits right next to it.
 
 ## FAQ
 

@@ -1,46 +1,109 @@
-//! 开机自启：写 HKCU Run 键。
-//!
-//! 路径必须带引号写入，否则含空格的安装目录会被错误解析（Unquoted Path）。
-
-use std::process::Command;
-
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+//! 使用注册表 API，保留 Unicode 路径并区分不存在与权限错误。
+use winreg::{
+    enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE},
+    RegKey,
+};
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "DeepSeekMonitorWindows";
 
-fn reg_delete_value() -> Result<(), String> {
-    let status = Command::new("reg")
-        .args(["delete", RUN_KEY, "/v", VALUE_NAME, "/f"])
-        .status()
-        .map_err(|error| format!("关闭开机自启失败：{error}"))?;
-    // 值本就不存在时 delete 失败属正常
-    let _ = status;
-    Ok(())
+pub fn read_value() -> Result<Option<String>, String> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    let key = match user.open_subkey_with_flags(RUN_KEY, KEY_READ) {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取开机自启失败：{error}")),
+    };
+    match key.get_value(VALUE_NAME) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取开机自启失败：{error}")),
+    }
+}
+
+pub fn set_value(value: Option<&str>) -> Result<(), String> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    if let Some(value) = value {
+        let (key, _) = user
+            .create_subkey(RUN_KEY)
+            .map_err(|e| format!("写入开机自启失败：{e}"))?;
+        return key
+            .set_value(VALUE_NAME, &value)
+            .map_err(|e| format!("写入开机自启失败：{e}"));
+    }
+    let key = match user.open_subkey_with_flags(RUN_KEY, KEY_WRITE) {
+        Ok(key) => key,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("关闭开机自启失败：{error}")),
+    };
+    match key.delete_value(VALUE_NAME) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("关闭开机自启失败：{error}")),
+    }
 }
 
 pub fn apply_autostart(enabled: bool) -> Result<(), String> {
     if enabled {
-        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-        // Run 键必须写带引号的路径：安装到含空格目录（如 Program Files）时，
-        // 裸路径会被解析成 C:\Program.exe + 参数，导致自启失败或被劫持。
-        let exe_arg = format!("\"{}\"", exe.to_string_lossy());
-        let status = Command::new("reg")
-            .args(["add", RUN_KEY, "/v", VALUE_NAME, "/t", "REG_SZ", "/d"])
-            .arg(exe_arg)
-            .args(["/f"])
-            .status()
-            .map_err(|error| format!("写入开机自启失败：{error}"))?;
-        if !status.success() {
-            return Err("写入开机自启失败".to_string());
-        }
-        return Ok(());
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        set_value(Some(&format!("\"{}\"", exe.to_string_lossy())))
+    } else {
+        set_value(None)
     }
-
-    reg_delete_value()
 }
 
-/// 配置落盘失败后的注册表回滚：把 Run 键恢复成「与用户刚才点选相反」的状态，
-/// 避免「已自启但设置显示关」或反过来。`attempted` 为本次尝试写入的目标状态。
-pub fn rollback_autostart(attempted: bool) -> Result<(), String> {
-    // 开启失败落盘 → 注册表应关掉；关闭失败落盘 → 注册表应再打开
-    apply_autostart(!attempted).map_err(|error| format!("回滚开机自启失败：{error}"))
+pub fn save_setting<T>(
+    enabled: bool,
+    persist: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let previous = read_value()?;
+    let desired = if enabled {
+        Some(format!(
+            "\"{}\"",
+            std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+        ))
+    } else {
+        None
+    };
+    transact(previous, desired.as_deref(), set_value, persist)
+}
+
+fn transact<T>(
+    previous: Option<String>,
+    desired: Option<&str>,
+    write: impl Fn(Option<&str>) -> Result<(), String>,
+    persist: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    write(desired)?;
+    match persist() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Err(rollback) = write(previous.as_deref()) {
+                return Err(format!("{error}；恢复开机自启失败：{rollback}"));
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn 配置保存失败完整恢复旧路径和参数() {
+        let old = "\"C:\\旧目录\\app.exe\" --background";
+        let writes = std::cell::RefCell::new(Vec::new());
+        let result = transact(
+            Some(old.into()),
+            Some("\"C:\\new\\app.exe\""),
+            |value| {
+                writes.borrow_mut().push(value.map(str::to_string));
+                Ok(())
+            },
+            || Err::<(), _>("disk denied".into()),
+        );
+        assert!(result.is_err());
+        assert_eq!(writes.borrow().last().unwrap().as_deref(), Some(old));
+    }
 }

@@ -1,7 +1,7 @@
 // `node:*` 内置模块的最小类型声明。
 //
 // 只为测试文件服务，避免为了跑单测而引入 @types/node（那会给项目加一条 devDependency，
-// 且它的全局声明会污染应用侧的 DOM 类型环境）。这里只声明 format.test.ts 实际用到的两个模块。
+// 且它的全局声明会污染应用侧的 DOM 类型环境）。这里只声明纯函数测试实际用到的两个模块。
 
 declare module "node:test" {
   export interface TestContext {

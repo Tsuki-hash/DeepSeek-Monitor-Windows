@@ -4,25 +4,34 @@ import {
   chartPointFromDay,
   fmtInt,
   fmtMoney,
+  fmtMoneyDisplay,
   fmtTokensShort,
   mmdd,
   recentUsageDays,
 } from "../format";
 import type { LoadState, ModelName, UsageResult } from "../types";
+import { updateTime } from "../data-display";
+import { usageNotices } from "../usage-notices";
 import { StackedBarChart } from "./StackedBarChart";
 
 function ModelDetailPanel({
+  updatedAt,
+  onSettings,
   model,
   usage,
   usageState,
   usageError,
   onBack,
+  onDataStatus,
 }: {
+  updatedAt?: number | null;
+  onSettings?: () => void;
   model: ModelName;
   usage: UsageResult | null;
   usageState: LoadState;
   usageError: string;
   onBack: () => void;
+  onDataStatus?: () => void;
 }) {
   const isFlash = model === "flash";
   const isOther = model === "other";
@@ -31,13 +40,14 @@ function ModelDetailPanel({
   const title =
     data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
   const tintClass = isFlash ? "flash" : isOther ? "other" : "pro";
-  const cost = data ? fmtMoney(data.cost) : "—";
+  const cost = data ? fmtMoneyDisplay(data.cost) : "—";
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
 
-  const days = recentUsageDays(usage?.days ?? []);
+  const days = recentUsageDays(usage?.days ?? [], 7, usage?.unavailableDates);
   const points = days.map((day) =>
     chartPointFromDay(day, isFlash ? "flash" : isOther ? "other" : "pro"),
   );
+  const notices = usageNotices(usage);
   const hasOther = points.some((point) => point.other > 0);
   const rangeText =
     points.length > 0
@@ -64,20 +74,20 @@ function ModelDetailPanel({
           )}
         </div>
         <div>
-          <h1>{title}</h1>
-          <p>{cost}</p>
+          <h1 title={title}>{title}</h1>
+          <p title={data ? fmtMoney(data.cost) : undefined}>本月 · {cost}</p>
         </div>
       </article>
 
       <div className="detail-metrics">
         <article className="card metric-card">
-          <span>API 请求次数</span>
+          <span>本月请求次数</span>
           <strong className={tintClass}>
             {data ? fmtInt(data.requestCount) : "—"}
           </strong>
         </article>
         <article className="card metric-card">
-          <span>Tokens</span>
+          <span>本月 Tokens</span>
           <strong className={tintClass}>{totalText}</strong>
         </article>
       </div>
@@ -87,6 +97,17 @@ function ModelDetailPanel({
           <div>
             <h2>按日 Token 消耗</h2>
             <span>{rangeText}</span>
+            {(notices.length > 0 ||
+              (usageError && usageState !== "nokey") ||
+              updatedAt) && (
+              <button className="data-status-link" onClick={onDataStatus}>
+                {usageError
+                  ? "更新失败 ›"
+                  : notices.length
+                    ? "数据待核对 ›"
+                    : `${updateTime(updatedAt)} 更新 ›`}
+              </button>
+            )}
           </div>
         </div>
         {usageState === "ok" && points.length > 0 ? (
@@ -97,8 +118,13 @@ function ModelDetailPanel({
           />
         ) : (
           <div className="chart-placeholder">
+            {usageState === "nokey" && (
+              <button className="empty-settings" onClick={onSettings}>
+                同步用量 Token ›
+              </button>
+            )}
             {usageState === "nokey"
-              ? "未配置用量 Token"
+              ? ""
               : usageState === "loading"
                 ? "查询中…"
                 : usageState === "error"

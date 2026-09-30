@@ -115,9 +115,13 @@ mod windows_impl {
             // 读请求并等 IO 真正结束），最后才关闭本结构体持有的事件句柄。
             unsafe {
                 let _ = SetEvent(self.stop_event);
-                let _ = WaitForSingleObject(self.exited_event, SHUTDOWN_TIMEOUT_MS);
-                let _ = CloseHandle(self.stop_event);
-                let _ = CloseHandle(self.exited_event);
+                if WaitForSingleObject(self.exited_event, SHUTDOWN_TIMEOUT_MS) == WAIT_OBJECT_0 {
+                    let _ = CloseHandle(self.stop_event);
+                    let _ = CloseHandle(self.exited_event);
+                } else {
+                    // 后台线程仍可能访问事件；宁可保留句柄，不能释放后让其被复用。
+                    log::warn!("缓存监听线程未确认退出，保留事件句柄以避免悬垂访问");
+                }
             }
         }
     }
@@ -164,7 +168,7 @@ mod windows_impl {
             }
         };
 
-        let (sender, receiver) = mpsc::channel::<()>();
+        let (sender, receiver) = mpsc::sync_channel::<()>(1);
         let alive = Arc::new(AtomicBool::new(true));
         let thread_alive = Arc::clone(&alive);
 
@@ -203,7 +207,7 @@ mod windows_impl {
         change_event: SendHandle,
         stop_event: SendHandle,
         exited_event: SendHandle,
-        sender: mpsc::Sender<()>,
+        sender: mpsc::SyncSender<()>,
         alive: Arc<AtomicBool>,
     ) {
         let dir_handle = HANDLE(dir_file.as_raw_handle());
@@ -244,7 +248,10 @@ mod windows_impl {
             if wait == WAIT_OBJECT_0.0 {
                 // 一批变更到达，读请求已完成：发信号后重新排队下一发
                 read_pending = false;
-                if sender.send(()).is_err() {
+                if matches!(
+                    sender.try_send(()),
+                    Err(mpsc::TrySendError::Disconnected(()))
+                ) {
                     // 接收端已释放（信号结构体先于线程消亡的兜底路径）：收摊
                     break;
                 }

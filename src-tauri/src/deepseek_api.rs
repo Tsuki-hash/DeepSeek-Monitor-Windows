@@ -58,7 +58,7 @@ impl BalanceResponse {
 
 /// 实时查询 DeepSeek 账户余额。
 pub async fn fetch_balance_with_key(api_key: &str) -> Result<BalanceResult, String> {
-    let client = http_client();
+    let client = http_client()?;
     let response = client
         .get("https://api.deepseek.com/user/balance")
         .bearer_auth(api_key)
@@ -111,6 +111,7 @@ pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<()
     let url =
         format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
     let resp = http_client()
+        .map_err(|_| VerifyFailure::Transient)?
         .get(&url)
         .bearer_auth(token)
         .header("x-app-version", "1.0.0")
@@ -119,7 +120,29 @@ pub async fn verify_usage_token(token: &str, month: u32, year: u32) -> Result<()
         .await
         .map_err(|_| VerifyFailure::Transient)?;
     match resp.status().as_u16() {
-        200 => Ok(()),
+        200 => {
+            let parsed = resp
+                .json::<AmountResp>()
+                .await
+                .map_err(|_| VerifyFailure::Transient)?;
+            let valid = parsed
+                .data
+                .biz_data
+                .total
+                .iter()
+                .chain(parsed.data.biz_data.days.iter().flat_map(|d| d.data.iter()))
+                .flat_map(|m| m.usage.iter())
+                .all(|e| {
+                    e.amount
+                        .parse::<f64>()
+                        .is_ok_and(|n| n.is_finite() && n >= 0.0 && n < u64::MAX as f64)
+                });
+            if valid {
+                Ok(())
+            } else {
+                Err(VerifyFailure::Transient)
+            }
+        }
         // 401/403 是对凭据本身的明确拒绝，与查询月份无关
         401 | 403 => Err(VerifyFailure::Definitive),
         _ => Err(VerifyFailure::Transient),
@@ -191,6 +214,7 @@ pub struct UsageDaySummary {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageResult {
+    pub warnings: Vec<String>,
     pub models: Vec<UsageModelSummary>,
     pub days: Vec<UsageDaySummary>,
     pub month_cost: f64,
@@ -201,8 +225,13 @@ pub fn build_usage_result(amount: &AmountResp, cost: &CostResp) -> UsageResult {
     let cost_total = cost.data.biz_data.first();
     let cost_for_model = |model: &str| -> f64 {
         cost_total
-            .and_then(|item| item.total.iter().find(|m| m.model == model))
-            .map(|m| cost_sum(&m.usage))
+            .map(|item| {
+                item.total
+                    .iter()
+                    .filter(|m| m.model == model)
+                    .map(|m| cost_sum(&m.usage))
+                    .sum()
+            })
             .unwrap_or(0.0)
     };
 
@@ -213,9 +242,27 @@ pub fn build_usage_result(amount: &AmountResp, cost: &CostResp) -> UsageResult {
     // 未知模型（如后续上线的 V4.1 Pro）聚合为「其他」兜底行，避免新模型名
     // 接入前其用量「日合计有、模型行无」地静默消失。正式接入仍以 model_slot 为准。
     let mut other_sum: Option<UsageModelSummary> = None;
-    for model_usage in &amount.data.biz_data.total {
+    let mut source = amount.data.biz_data.total.clone();
+    let mut model_names: std::collections::HashSet<String> =
+        source.iter().map(|m| m.model.clone()).collect();
+    if let Some(cost) = cost_total {
+        for entry in &cost.total {
+            if model_names.insert(entry.model.clone()) {
+                source.push(ModelUsage {
+                    model: entry.model.clone(),
+                    usage: vec![],
+                });
+            }
+        }
+    }
+    let mut charged_models = std::collections::HashSet::new();
+    for model_usage in &source {
         let breakdown = token_breakdown(&model_usage.usage);
-        let cost = cost_for_model(&model_usage.model);
+        let cost = if charged_models.insert(&model_usage.model) {
+            cost_for_model(&model_usage.model)
+        } else {
+            0.0
+        };
         match model_slot(&model_usage.model) {
             Some((slot, display)) if slot == FLASH_SLOT => {
                 flash_sum = Some(merge_model_slot(
@@ -260,12 +307,23 @@ pub fn build_usage_result(amount: &AmountResp, cost: &CostResp) -> UsageResult {
     if let Some(item) = cost_total {
         for day in &item.days {
             let day_cost: f64 = day.data.iter().map(|m| cost_sum(&m.usage)).sum();
-            cost_by_date.insert(day.date.clone(), day_cost);
+            *cost_by_date.entry(day.date.clone()).or_default() += day_cost;
         }
     }
 
     let mut days = Vec::new();
-    for day in &amount.data.biz_data.days {
+    let mut daily_source = amount.data.biz_data.days.clone();
+    let mut known_dates: std::collections::HashSet<_> =
+        daily_source.iter().map(|d| d.date.clone()).collect();
+    for date in cost_by_date.keys() {
+        if known_dates.insert(date.clone()) {
+            daily_source.push(DayUsage {
+                date: date.clone(),
+                data: vec![],
+            });
+        }
+    }
+    for day in &daily_source {
         let mut flash = 0u64;
         let mut flash_hit = 0u64;
         let mut flash_miss = 0u64;
@@ -319,6 +377,13 @@ pub fn build_usage_result(amount: &AmountResp, cost: &CostResp) -> UsageResult {
         .unwrap_or(0.0);
 
     UsageResult {
+        warnings: if source.len() != amount.data.biz_data.total.len()
+            || daily_source.len() != amount.data.biz_data.days.len()
+        {
+            vec!["费用与 Token 数据尚未完全对齐，请稍后刷新".into()]
+        } else {
+            vec![]
+        },
         models,
         days,
         month_cost,
@@ -362,7 +427,7 @@ pub async fn fetch_usage_with_token(
     month: u32,
     year: u32,
 ) -> Result<UsageResult, String> {
-    let client = http_client();
+    let client = http_client()?;
     let amount_url =
         format!("https://platform.deepseek.com/api/v0/usage/amount?month={month}&year={year}");
     let cost_url =
@@ -374,12 +439,79 @@ pub async fn fetch_usage_with_token(
         get_json(client, &cost_url, token),
     )?;
 
+    if cost.data.biz_data.len() > 1 {
+        return Err("平台返回多个费用业务分组，暂无法确认统计口径，请保留旧数据并反馈".into());
+    }
+    validate_usage_entries(&amount, &cost)?;
     Ok(build_usage_result(&amount, &cost))
+}
+
+fn validate_usage_entries(amount: &AmountResp, cost: &CostResp) -> Result<(), String> {
+    let entries = amount
+        .data
+        .biz_data
+        .total
+        .iter()
+        .chain(amount.data.biz_data.days.iter().flat_map(|d| d.data.iter()))
+        .chain(cost.data.biz_data.iter().flat_map(|b| {
+            b.total
+                .iter()
+                .chain(b.days.iter().flat_map(|d| d.data.iter()))
+        }))
+        .flat_map(|m| m.usage.iter());
+    for entry in entries {
+        let n = entry
+            .amount
+            .parse::<f64>()
+            .map_err(|_| "平台返回无法解析的用量数值，请稍后重试")?;
+        if !n.is_finite() || n < 0.0 || n >= u64::MAX as f64 {
+            return Err("平台返回超出范围的用量数值，请稍后重试".into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 费用重复条目累加_同模型多数量条目不重复收费() {
+        let mut amount = amount_sample();
+        amount
+            .data
+            .biz_data
+            .total
+            .push(amount.data.biz_data.total[0].clone());
+        let mut cost = cost_sample();
+        let duplicate = cost.data.biz_data[0].total[0].clone();
+        cost.data.biz_data[0].total.push(duplicate);
+        let result = build_usage_result(&amount, &cost);
+        assert!((result.models[0].cost - 0.6).abs() < 1e-9);
+        assert!((result.month_cost - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn 只有费用的模型日期仍显示并标记不完整() {
+        let mut amount = amount_sample();
+        amount.data.biz_data.total.clear();
+        amount.data.biz_data.days.clear();
+        let result = build_usage_result(&amount, &cost_sample());
+        assert_eq!(result.models.len(), 1);
+        assert_eq!(result.days.len(), 1);
+        assert_eq!(result.days[0].date, "2026-09-01");
+        assert!((result.days[0].total_cost - 0.05).abs() < 1e-9);
+        assert!(!result.warnings.is_empty());
+    }
+
+    #[test]
+    fn 非法用量数值拒绝作为成功数据() {
+        for value in ["NaN", "inf", "-1", "not-a-number"] {
+            let mut amount = amount_sample();
+            amount.data.biz_data.total[0].usage[0].amount = value.into();
+            assert!(validate_usage_entries(&amount, &cost_sample()).is_err());
+        }
+    }
 
     fn amount_sample() -> AmountResp {
         let json = r#"{

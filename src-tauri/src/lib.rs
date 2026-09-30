@@ -1,11 +1,14 @@
 pub mod autostart;
+pub mod browsing_data;
 pub mod cache_watch;
 pub mod commands;
 pub mod config;
 pub mod credentials;
 pub mod deepseek_api;
+pub mod error;
 pub mod http;
 pub mod sync_script;
+pub mod sync_session;
 pub mod token_sync;
 pub mod tray;
 pub mod usage;
@@ -18,11 +21,6 @@ mod test_support;
 // 命令层在 commands（含权限校验），托盘与显隐在 tray，登录同步在 usage_watcher，
 // HTTP 客户端在 http，开机自启在 autostart，面板几何在 window_pos。
 // 本文件只做进程装配：插件、共享状态、命令注册、托盘初始化。
-
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
-    Arc,
-};
 
 use tauri::Manager;
 
@@ -37,15 +35,13 @@ pub fn run() {
                 tray::show_main_window(&window);
             }
         }))
-        // 本次用量同步是否已成功捕获（watcher 退出判定用）。
-        .manage(Arc::new(AtomicBool::new(false)))
-        // watcher 代际号。每次 start_usage_sync 建窗时 +1，旧 watcher 发现
-        // 代际不匹配则退出，避免关窗后 1.5s 内再点同步拉起双 watcher。
-        .manage(Arc::new(AtomicU64::new(0)))
+        .manage(sync_session::SyncSession::default())
         .invoke_handler(tauri::generate_handler![
             commands::hide_main_window,
             commands::is_main_window_visible,
             commands::get_app_config,
+            commands::get_diagnostics,
+            commands::open_support_page,
             commands::save_api_key,
             commands::clear_api_key,
             commands::save_refresh_interval,
@@ -56,6 +52,8 @@ pub fn run() {
             commands::clear_usage_token,
             commands::fetch_usage,
             commands::start_usage_sync,
+            commands::cancel_usage_sync,
+            commands::forget_usage_session,
             commands::usage_token_captured
         ])
         .setup(|app| {

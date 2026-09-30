@@ -8,12 +8,10 @@ export type StackedPoint = {
   response: number;
   other: number;
   total: number;
+  unavailable?: boolean;
 };
 
-// 主面板（Flash + Pro 合并）与详情页（单模型）的柱状图此前是两份近乎逐行相同的 JSX
-// （约 70 行 × 2），本次评审就需要人工比对两处确认逻辑一致。抽成同一个组件后，
-// 分段顺序、tooltip 结构、可访问性只有一处实现，改样式或加分段不必再同步两处。
-// 两处仅类名与日期标签元素不同，用 variant 区分，保持各自的渲染结果不变。
+// 主面板与详情共用交互：指向预览、点击固定、Escape 收起；明细占独立区域。
 function StackedBarChart({
   points,
   variant,
@@ -24,10 +22,29 @@ function StackedBarChart({
   hasOther: boolean;
 }) {
   const [hoveredIdx, setHoveredIdx] = React.useState<number | null>(null);
-  // 触摸/点按展开明细，再点收起
-  const togglePin = (idx: number) => {
-    setHoveredIdx((prev) => (prev === idx ? null : idx));
+  const [focusedIdx, setFocusedIdx] = React.useState<number | null>(null);
+  const [pinnedDate, setPinnedDate] = React.useState<string | null>(null);
+  const matchingIndex = points.findIndex((point) => point.date === pinnedDate);
+  const pinnedIdx = matchingIndex >= 0 ? matchingIndex : null;
+  const activeIdx = pinnedIdx ?? focusedIdx ?? hoveredIdx;
+  const active = activeIdx == null ? null : points[activeIdx];
+  const dismiss = () => {
+    setPinnedDate(null);
+    setFocusedIdx(null);
+    setHoveredIdx(null);
   };
+  React.useEffect(() => {
+    if (pinnedDate == null) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPinnedDate(null);
+        setFocusedIdx(null);
+        setHoveredIdx(null);
+      }
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [pinnedDate]);
   const MIN_BAR = 3; // 整根柱子的最小可见高度百分比（含空数据占位）
   const maxVal = Math.max(...points.map((point) => point.total), 1);
   const isSummary = variant === "summary";
@@ -40,10 +57,11 @@ function StackedBarChart({
       >
         {points.map((point, idx) => {
           // 键盘用户与读屏用户拿到的是同一条信息：日期、合计与各分段明细
-          const label =
-            `${point.date}：合计 ${fmtInt(point.total)} tokens，` +
-            `命中 ${fmtInt(point.hit)}，未命中 ${fmtInt(point.miss)}，输出 ${fmtInt(point.response)}` +
-            (point.other > 0 ? `，其他 ${fmtInt(point.other)}` : "");
+          const label = point.unavailable
+            ? `${point.date}：数据暂未取得，不代表用量为零`
+            : `${point.date}：合计 ${fmtInt(point.total)} tokens，` +
+              `命中 ${fmtInt(point.hit)}，未命中 ${fmtInt(point.miss)}，输出 ${fmtInt(point.response)}` +
+              (point.other > 0 ? `，其他 ${fmtInt(point.other)}` : "");
           // 最近 7 天窗口的末柱恒为今天；给整排日期一个中文锚点，读图不用数格子
           const isToday =
             idx === points.length - 1 && point.date === todayStr();
@@ -51,81 +69,53 @@ function StackedBarChart({
           return (
             <div
               className={`${isSummary ? "bar-column" : "detail-bar-column"}${
-                hoveredIdx === idx ? " hovered" : ""
+                activeIdx === idx ? " hovered" : ""
               }`}
               key={point.date}
             >
-              {hoveredIdx === idx && point.total > 0 && (
-                <div
-                  id={`bar-tooltip-${variant}-${idx}`}
-                  className={`bar-tooltip${
-                    idx <= 1
-                      ? " align-left"
-                      : idx >= points.length - 2
-                        ? " align-right"
-                        : ""
-                  }`}
-                >
-                  <div className="bar-tooltip-head">
-                    <span className="bar-tooltip-date">{point.date}</span>
-                    <strong>{fmtInt(point.total)} tokens</strong>
-                  </div>
-                  <span className="bar-tooltip-row">
-                    <i className="dot hit" />
-                    输入（命中缓存）
-                    <strong>{fmtInt(point.hit)} tokens</strong>
-                  </span>
-                  <span className="bar-tooltip-row">
-                    <i className="dot miss" />
-                    输入（未命中缓存）
-                    <strong>{fmtInt(point.miss)} tokens</strong>
-                  </span>
-                  <span className="bar-tooltip-row">
-                    <i className="dot response" />
-                    输出
-                    <strong>{fmtInt(point.response)} tokens</strong>
-                  </span>
-                  {point.other > 0 && (
-                    <span className="bar-tooltip-row">
-                      <i className="dot other" />
-                      其他（含未识别模型）
-                      <strong>{fmtInt(point.other)} tokens</strong>
-                    </span>
-                  )}
-                </div>
-              )}
               {isSummary ? (
                 <span className="bar-value">
-                  {point.total > 0 ? fmtTokensShort(point.total) : "0"}
+                  {point.unavailable
+                    ? "—"
+                    : point.total > 0
+                      ? fmtTokensShort(point.total)
+                      : "0"}
                 </span>
               ) : (
                 <span>
-                  {point.total > 0 ? fmtTokensShort(point.total) : ""}
+                  {point.unavailable
+                    ? "—"
+                    : point.total > 0
+                      ? fmtTokensShort(point.total)
+                      : ""}
                 </span>
               )}
-              <div className={isSummary ? "bar-slot" : "detail-bar-slot"}>
-                <div
-                  className={isSummary ? "cache-bar" : "detail-bar-stacked"}
-                  role="img"
-                  tabIndex={0}
-                  aria-label={label}
-                  aria-describedby={
-                    hoveredIdx === idx
-                      ? `bar-tooltip-${variant}-${idx}`
-                      : undefined
-                  }
-                  style={{
-                    height: `${point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
-                  }}
-                  onMouseEnter={() => setHoveredIdx(idx)}
-                  onMouseLeave={() => setHoveredIdx(null)}
-                  onFocus={() => setHoveredIdx(idx)}
-                  onBlur={() => setHoveredIdx(null)}
-                  onTouchStart={(event) => {
+              <button
+                className={isSummary ? "bar-slot" : "detail-bar-slot"}
+                type="button"
+                aria-label={`${label}。点击或按 Enter 固定明细，Escape 收起`}
+                aria-pressed={pinnedIdx === idx}
+                onMouseEnter={() => setHoveredIdx(idx)}
+                onMouseLeave={() => setHoveredIdx(null)}
+                onFocus={() => setFocusedIdx(idx)}
+                onBlur={() => setFocusedIdx(null)}
+                onClick={() =>
+                  setPinnedDate((prev) =>
+                    prev === point.date ? null : point.date,
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
                     event.preventDefault();
-                    togglePin(idx);
+                    dismiss();
+                  }
+                }}
+              >
+                <span
+                  className={`${isSummary ? "cache-bar" : "detail-bar-stacked"}${point.unavailable ? " unavailable" : ""}`}
+                  style={{
+                    height: `${point.unavailable ? 18 : point.total > 0 ? Math.max(MIN_BAR, (point.total / maxVal) * 100) : MIN_BAR}%`,
                   }}
-                  onClick={() => togglePin(idx)}
                 >
                   {point.total > 0 ? (
                     <>
@@ -157,8 +147,8 @@ function StackedBarChart({
                   ) : (
                     <i className="seg empty" />
                   )}
-                </div>
-              </div>
+                </span>
+              </button>
               {isSummary ? (
                 <span className="bar-day">{dayLabel}</span>
               ) : (
@@ -168,24 +158,64 @@ function StackedBarChart({
           );
         })}
       </div>
-      <div className="chart-legend-bottom">
-        <span className="chart-legend-item">
-          <i className="dot hit" />
-          命中
-        </span>
-        <span className="chart-legend-item">
-          <i className="dot miss" />
-          未命中
-        </span>
-        <span className="chart-legend-item">
-          <i className="dot response" />
-          输出
-        </span>
-        {hasOther && (
-          <span className="chart-legend-item">
-            <i className="dot other" />
-            其他
-          </span>
+      <div className="chart-inspector" aria-live="polite" aria-atomic="true">
+        {active ? (
+          <>
+            <div className="chart-inspector-head">
+              <span>
+                {mmdd(active.date)}
+                {pinnedIdx != null ? " · 已固定" : ""}
+              </span>
+              <strong>
+                {active.unavailable
+                  ? "数据待取得"
+                  : `${fmtTokensShort(active.total)} Tokens`}
+              </strong>
+            </div>
+            {active.unavailable ? (
+              <div className="chart-inspector-note">
+                尚未取得数据，不代表用量为零
+              </div>
+            ) : (
+              <div
+                className={`chart-inspector-values${hasOther ? " four" : ""}`}
+              >
+                {(
+                  [
+                    ["hit", "命中", active.hit],
+                    ["miss", "未命中", active.miss],
+                    ["response", "输出", active.response],
+                    ...(hasOther ? [["other", "其他", active.other]] : []),
+                  ] as [string, string, number][]
+                ).map(([key, title, value]) => (
+                  <span key={key} title={`${title}：${fmtInt(value)} Tokens`}>
+                    <i className={`dot ${key}`} />
+                    {title}{" "}
+                    <strong>{fmtTokensShort(value).replace(".0", "")}</strong>
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="chart-legend-bottom">
+              {[
+                ["hit", "命中"],
+                ["miss", "未命中"],
+                ["response", "输出"],
+                ...(hasOther ? [["other", "其他"]] : []),
+              ].map(([key, title]) => (
+                <span className="chart-legend-item" key={key}>
+                  <i className={`dot ${key}`} />
+                  {title}
+                </span>
+              ))}
+            </div>
+            <div className="chart-inspector-note">
+              点选日期固定明细 · Esc 收起
+            </div>
+          </>
         )}
       </div>
     </>

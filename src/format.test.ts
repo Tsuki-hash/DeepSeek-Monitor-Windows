@@ -11,12 +11,14 @@ import assert from "node:assert/strict";
 
 import {
   addDays,
+  accountingDateKey,
   chartPointFromDay,
   currencySymbol,
   dateKey,
   emptyUsageDay,
   fmtInt,
   fmtMoney,
+  fmtMoneyDisplay,
   fmtTokensShort,
   mmdd,
   nextLoadStateAfterError,
@@ -49,6 +51,9 @@ test("fmtTokensShort：各档阈值", () => {
   // 1e8 起改用整百万，避免出现「100.0M」这种带小数的大数
   assert.equal(fmtTokensShort(1e8), "100M");
   assert.equal(fmtTokensShort(2.5e8), "250M");
+  assert.equal(fmtTokensShort(1e9), "1.0B");
+  assert.equal(fmtTokensShort(999_950_000), "1.0B");
+  assert.equal(fmtTokensShort(1e12), "1.0T");
 });
 
 test("fmtTokensShort：输出长度可控（柱顶标签的硬约束）", () => {
@@ -56,6 +61,7 @@ test("fmtTokensShort：输出长度可控（柱顶标签的硬约束）", () => 
   // 这条断言是柱顶数值不再被 ellipsis 裁掉的护栏。
   const samples = [
     0, 999, 1000, 9999, 99999, 999499, 999500, 1e6, 9.9e6, 99999999, 1e8, 9.9e8,
+    1e9, 1e12,
   ];
   for (const value of samples) {
     assert.ok(
@@ -102,8 +108,23 @@ test("dateKey：补零到两位，且不受时区偏移影响", () => {
   assert.equal(dateKey(new Date(2026, 8, 11, 23, 59, 59)), "2026-09-11");
 });
 
-test("todayStr：与 dateKey 口径一致", () => {
-  assert.equal(todayStr(), dateKey(new Date()));
+test("todayStr：使用平台东八区记账日期", () => {
+  assert.equal(todayStr(), accountingDateKey(new Date()));
+  assert.equal(
+    accountingDateKey(new Date("2026-09-30T16:00:00Z")),
+    "2026-10-01",
+  );
+  assert.equal(
+    accountingDateKey(new Date("2026-12-31T16:00:00Z")),
+    "2027-01-01",
+  );
+});
+
+test("recentUsageDays：未获取日期为未知，已获取无用量日期为零", () => {
+  const result = recentUsageDays([], 7, [todayStr()]);
+  assert.equal(result[6].unavailable, true);
+  assert.equal(chartPointFromDay(result[6]).unavailable, true);
+  assert.equal(result[5].unavailable, false);
 });
 
 test("addDays：跨月与跨年", () => {
@@ -298,4 +319,11 @@ test("chartPointFromDay：other 档在合计小于已知模型时夹到 0", () =
   const point = chartPointFromDay(sample, "other");
   assert.equal(point.other, 0);
   assert.equal(point.total, 0);
+});
+
+test("大额货币展示保持紧凑，普通金额保留分位与币种", () => {
+  assert.equal(fmtMoneyDisplay(128.56), "¥128.56");
+  assert.equal(fmtMoneyDisplay(9999.99, "$"), "$9999.99");
+  assert.equal(fmtMoneyDisplay(12345678.9), "¥12.3M");
+  assert.equal(fmtMoneyDisplay(1234567890123.45), "¥1.2T");
 });

@@ -1,6 +1,6 @@
 import React from "react";
 import { Brain, Shapes, Zap } from "lucide-react";
-import { fmtInt, fmtMoney, fmtTokensShort } from "../format";
+import { fmtInt, fmtMoney, fmtMoneyDisplay, fmtTokensShort } from "../format";
 import type { LoadState, ModelName, UsageModel } from "../types";
 
 function UsageRow({
@@ -23,10 +23,10 @@ function UsageRow({
   const name =
     data?.name ?? (isFlash ? "V4.1 Flash" : isOther ? "其他" : "V4 Pro");
   // 这一行只有约 115px 给 token 数，千万级以上再写精确千分位会溢出成省略号，
-  // 因此大数用紧凑写法，精确值仍在详情页的柱状图浮窗里可查。
+  // 因此大数用紧凑写法，精确值仍可通过图表按钮的无障碍标签与明细标题查看。
   const tokensText = data
     ? `${
-        data.totalTokens < 10_000_000
+        data.totalTokens < 1_000_000
           ? fmtInt(data.totalTokens)
           : fmtTokensShort(data.totalTokens)
       } Tokens`
@@ -37,7 +37,7 @@ function UsageRow({
         : state === "error"
           ? "用量不可用"
           : "—";
-  const cost = data ? fmtMoney(data.cost) : "—";
+  const cost = data ? fmtMoneyDisplay(data.cost) : "—";
   const ratio =
     data && data.cost > 0
       ? `${fmtTokensShort(data.totalTokens / data.cost)} T/¥`
@@ -58,9 +58,16 @@ function UsageRow({
         )}
       </div>
       <div className="usage-main">
-        <h2>{name}</h2>
+        <h2>
+          <span className="model-name" title={name}>
+            {name}
+          </span>
+          <small className="model-period">本月</small>
+        </h2>
         <div className="token-line">
-          <span>{tokensText}</span>
+          <span title={data ? `${fmtInt(data.totalTokens)} Tokens` : undefined}>
+            {tokensText}
+          </span>
           <div className="progress-track">
             <i
               className={
@@ -71,7 +78,10 @@ function UsageRow({
           </div>
         </div>
         {data && data.cacheHitTokens + data.cacheMissTokens > 0 && (
-          <span className={`cache-hit-rate ${tint}`}>
+          <span
+            className={`cache-hit-rate ${tint}`}
+            title="缓存命中输入 /（缓存命中输入 + 未命中输入），不含输出与未知输入"
+          >
             缓存命中{" "}
             {(
               (data.cacheHitTokens /
@@ -83,8 +93,8 @@ function UsageRow({
         )}
       </div>
       <div className="usage-price">
-        <strong>{cost}</strong>
-        <span>{ratio}</span>
+        <strong title={data ? fmtMoney(data.cost) : undefined}>{cost}</strong>
+        <span title="本月 Token 总数 / 本月人民币费用">{ratio}</span>
       </div>
     </button>
   );
