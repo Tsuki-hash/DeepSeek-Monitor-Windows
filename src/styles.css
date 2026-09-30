@@ -730,10 +730,15 @@ button {
   flex: 1 1 auto;
   height: auto;
   min-height: 142px;
-  padding: 12px 14px 14px;
+  padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.dashboard-panel:not(:has(.usage-row:nth-child(3))) .chart-inspector {
+  margin-top: 10px;
+  margin-bottom: -6px;
 }
 
 /* 出现「其他」模型档位时是三个使用行，纵向比两行多出约 76px，
