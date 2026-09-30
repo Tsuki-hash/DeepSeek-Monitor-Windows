@@ -9,6 +9,10 @@ import { currencySymbol, fmtMoney } from "./format";
 import type { AppConfig, BalanceData, SavedApiKey, UsageResult } from "./types";
 import { fetchCurrentUsage } from "./usage-api";
 import { errorMessage } from "./error-state";
+import {
+  beginApiKeyOperation,
+  isCurrentApiKeyOperation,
+} from "./api-key-operation";
 
 function useSettingsActions(handlers: {
   onUsageLoaded: (usage: UsageResult) => void;
@@ -193,10 +197,12 @@ export function useSettingsState(handlers: {
   }, []);
 
   const saveApiKey = React.useCallback(() => {
+    const operation = beginApiKeyOperation();
     setBusy(true);
     setStatus("正在验证 API Key…");
     void invoke<SavedApiKey>("save_api_key", { apiKey })
       .then(({ config: nextConfig, balance }) => {
+        if (!isCurrentApiKeyOperation(operation)) return;
         setConfig(nextConfig);
         setApiKey("");
         onBalanceLoaded(balance);
@@ -205,6 +211,7 @@ export function useSettingsState(handlers: {
         setStatus(`验证通过，当前余额 ${symbol}${balance.totalBalance}${tip}`);
       })
       .catch((error) => {
+        if (!isCurrentApiKeyOperation(operation)) return;
         const message = errorMessage(error);
         setStatus(message);
       })
@@ -212,15 +219,18 @@ export function useSettingsState(handlers: {
   }, [apiKey, onBalanceLoaded]);
 
   const clearApiKey = React.useCallback(() => {
+    const operation = beginApiKeyOperation();
     setBusy(true);
     void invoke<AppConfig>("clear_api_key")
       .then((nextConfig) => {
+        if (!isCurrentApiKeyOperation(operation)) return;
         setConfig(nextConfig);
         setApiKey("");
         setStatus("已清除 API Key");
         onBalanceCleared();
       })
       .catch((error) => {
+        if (!isCurrentApiKeyOperation(operation)) return;
         setStatus(errorMessage(error));
       })
       .finally(() => setBusy(false));

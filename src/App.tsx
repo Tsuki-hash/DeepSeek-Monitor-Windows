@@ -9,7 +9,8 @@ import type {
   UsageResult,
   ViewName,
 } from "./types";
-import { nextLoadStateAfterError } from "./format";
+import { nextLoadStateAfterError, todayStr } from "./format";
+import { currentUsageSnapshot } from "./usage-snapshot";
 import { fetchCurrentUsage, invalidateUsageRequests } from "./usage-api";
 import { RequestGate } from "./request-gate";
 import { errorInfo } from "./error-state";
@@ -90,9 +91,15 @@ function App() {
   }, []);
 
   const usageRequestId = React.useRef(0);
+  const usageSnapshot = React.useRef<UsageResult | null>(null);
   const loadUsage = React.useCallback((silent = false) => {
     const requestId = ++usageRequestId.current;
-    if (silent) {
+    const retained = currentUsageSnapshot(usageSnapshot.current, todayStr());
+    usageSnapshot.current = retained;
+    availableSnapshot.current.usage = retained !== null;
+    setUsage(retained);
+    if (!retained) setUsageUpdatedAt(null);
+    if (silent && retained) {
       setUsageState((prev) => (prev === "ok" ? prev : "loading"));
     } else {
       setUsageState("loading");
@@ -102,8 +109,11 @@ function App() {
         if (requestId !== usageRequestId.current) {
           return;
         }
+        const current = currentUsageSnapshot(data, todayStr());
+        if (!current) throw new Error("记账月份已变化，请重新刷新用量");
         availableSnapshot.current.usage = true;
-        setUsage(data);
+        usageSnapshot.current = current;
+        setUsage(current);
         setUsageUpdatedAt(Date.now());
         failures.current.usage = 0;
         setUsageState("ok");
@@ -116,10 +126,14 @@ function App() {
         const { message, code } = errorInfo(error);
         failures.current.usage += 1;
         setUsageError(message);
-        if (code === "credentials_invalid" || code === "not_configured") {
-          availableSnapshot.current.usage = false;
-          setUsage(null);
-        }
+        const retained =
+          code === "credentials_invalid" || code === "not_configured"
+            ? null
+            : currentUsageSnapshot(usageSnapshot.current, todayStr());
+        usageSnapshot.current = retained;
+        availableSnapshot.current.usage = retained !== null;
+        setUsage(retained);
+        if (!retained) setUsageUpdatedAt(null);
         // 同一凭据下刷新失败保留快照与时间；无凭据或失效凭据仍显示对应错误。
         setUsageState((prev) =>
           nextLoadStateAfterError(
@@ -234,6 +248,7 @@ function App() {
       usageRequestId.current += 1;
       invalidateUsageRequests();
       availableSnapshot.current.usage = false;
+      usageSnapshot.current = null;
       setUsage(null);
       setUsageUpdatedAt(null);
       void loadUsage();
@@ -242,6 +257,7 @@ function App() {
       usageRequestId.current += 1;
       invalidateUsageRequests();
       availableSnapshot.current.usage = false;
+      usageSnapshot.current = null;
       setUsage(null);
       setUsageUpdatedAt(null);
       setUsageState("nokey");
@@ -320,11 +336,17 @@ function App() {
             setBalanceError("");
           }}
           onUsageLoaded={(nextUsage) => {
+            const current = currentUsageSnapshot(nextUsage, todayStr());
+            if (!current) {
+              void loadUsage();
+              return;
+            }
             // 设置页的刷新代表更新的意图：作废 App 侧在途的旧请求，
             // 避免慢响应返回后把设置页刚拿到的数据覆盖掉
             usageRequestId.current += 1;
             availableSnapshot.current.usage = true;
-            setUsage(nextUsage);
+            usageSnapshot.current = current;
+            setUsage(current);
             setUsageUpdatedAt(Date.now());
             setUsageState("ok");
             setUsageError("");
@@ -333,6 +355,7 @@ function App() {
             usageRequestId.current += 1;
             invalidateUsageRequests();
             availableSnapshot.current.usage = false;
+            usageSnapshot.current = null;
             setUsage(null);
             setUsageUpdatedAt(null);
             setUsageState("nokey");

@@ -4,6 +4,10 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct SyncSession(Mutex<SessionState>);
 
+/// API Key 操作使用独立会话，不能与网页登录的取消/清理相互作废。
+#[derive(Default)]
+pub struct ApiKeySession(pub SyncSession);
+
 #[derive(Default)]
 struct SessionState {
     generation: u64,
@@ -92,6 +96,41 @@ impl SyncSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key清除拒绝迟到保存_新保存优先_不影响用量同步() {
+        let key = ApiKeySession::default();
+        let usage = SyncSession::default();
+        let usage_generation = usage.begin().unwrap();
+        let old = key.0.begin().unwrap();
+        let mut stored = Some("original");
+        key.0.cancel(|| stored = None);
+        assert!(key
+            .0
+            .commit(old, || {
+                stored = Some("late");
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(stored, None);
+        let first = key.0.begin().unwrap();
+        let second = key.0.begin().unwrap();
+        key.0
+            .commit(second, || {
+                stored = Some("new");
+                Ok(())
+            })
+            .unwrap();
+        assert!(key
+            .0
+            .commit(first, || {
+                stored = Some("old");
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(stored, Some("new"));
+        assert!(usage.is_current(usage_generation));
+    }
 
     #[test]
     fn 取消与新会话拒绝旧提交_成功只能提交一次() {

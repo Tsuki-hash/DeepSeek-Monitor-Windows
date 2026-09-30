@@ -36,6 +36,7 @@ pub fn run() {
             }
         }))
         .manage(sync_session::SyncSession::default())
+        .manage(sync_session::ApiKeySession::default())
         .invoke_handler(tauri::generate_handler![
             commands::hide_main_window,
             commands::is_main_window_visible,

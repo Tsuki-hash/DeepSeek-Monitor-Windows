@@ -34,6 +34,7 @@ export type UsageModel = {
   cost: number;
 };
 export type UsageResult = {
+  accountingDate?: string;
   warnings?: string[];
   unavailableDates?: string[];
   models: UsageModel[];

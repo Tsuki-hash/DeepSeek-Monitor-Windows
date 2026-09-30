@@ -13,7 +13,7 @@ use crate::deepseek_api::{
     fetch_balance_with_key, fetch_usage_with_token, BalanceResult, UsageResult,
 };
 use crate::error::CommandError;
-use crate::sync_session::SyncSession;
+use crate::sync_session::{ApiKeySession, SyncSession};
 use crate::tray::hide_main_window_inner;
 use crate::usage_watcher::{
     capture_usage_token, open_login_window, prescan_cached_token, spawn_title_watcher,
@@ -84,6 +84,7 @@ pub(crate) fn open_support_page(window: WebviewWindow, page: String) -> Result<(
 #[tauri::command]
 pub(crate) async fn save_api_key(
     window: WebviewWindow,
+    app: tauri::AppHandle,
     api_key: String,
 ) -> Result<SavedApiKey, CommandError> {
     require_main(&window)?;
@@ -92,13 +93,16 @@ pub(crate) async fn save_api_key(
         return Err("API Key 不能为空".into());
     }
 
+    let generation = app.state::<ApiKeySession>().0.begin()?;
     let balance = fetch_balance_with_key(&value).await.map_err(|e| {
         CommandError::new(format!("验证未通过，原 Key 未更改：{e}"), Some("api_key"))
     })?;
-    let config = to_app_config(edit_config(|config| {
-        config.api_key = Some(value);
-        Ok(())
-    })?)?;
+    let config = app.state::<ApiKeySession>().0.commit(generation, || {
+        to_app_config(edit_config(|config| {
+            config.api_key = Some(value);
+            Ok(())
+        })?)
+    })?;
     Ok(SavedApiKey { config, balance })
 }
 
@@ -109,12 +113,17 @@ pub(crate) struct SavedApiKey {
 }
 
 #[tauri::command]
-pub(crate) fn clear_api_key(window: WebviewWindow) -> Result<AppConfig, String> {
+pub(crate) fn clear_api_key(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<AppConfig, String> {
     require_main(&window)?;
-    to_app_config(edit_config(|config| {
-        config.api_key = None;
-        Ok(())
-    })?)
+    app.state::<ApiKeySession>().0.cancel(|| {
+        to_app_config(edit_config(|config| {
+            config.api_key = None;
+            Ok(())
+        })?)
+    })
 }
 
 #[tauri::command]

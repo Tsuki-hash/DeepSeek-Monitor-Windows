@@ -13,7 +13,10 @@ export const fetchCurrentUsage = () =>
   usageGate.run(async () => {
     const date = todayStr();
     const [year, month, day] = date.split("-").map(Number);
-    const current = await fetchMonthUsage(month, year);
+    const current = {
+      ...(await fetchMonthUsage(month, year)),
+      accountingDate: date,
+    };
     const needsPreviousMonth = day <= 6;
     if (!needsPreviousMonth) {
       return current;

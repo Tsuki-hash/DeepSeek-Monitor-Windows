@@ -66,7 +66,7 @@ Usage needs a second credential. See "Two credentials, don't mix them" below.
 - Left-click the tray icon: show or hide the panel.
 - Right-click the tray icon: show the dashboard, or quit.
 - Model rows show the current month; the chart shows the last seven days, including today, using UTC+8 accounting dates.
-- Balance and usage have separate update times displayed in the computer's local time zone. Network failures preserve the latest successful data, with details and retry or synchronization actions.
+- Balance and usage have separate update times displayed in the computer's local time zone. Usage failures preserve successful data from the same accounting month. Previous-month totals are hidden after a month change, and new dates without fetched data remain unknown. Details and retry or synchronization actions are available.
 - Hover to preview daily data, click to pin it, or use Tab and Enter / Space. Esc dismisses details, which appear below the chart.
 
 ## Two credentials, don't mix them
